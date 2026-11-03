@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 离线测试（工具协议 / SSE / 请求体）
+        run: node test/offline.mjs
+
+      - name: 装配测试（假 ctx 跑 apply + 全部 HTTP 路由）
+        run: node test/assembly.mjs
+
+      - name: 渲染测试（面板五个页签）
+        run: node test/render.mjs
+
+  # 线上探针只在 Linux 跑一次 —— 它要打真实站点，重复跑没意义还容易被限流
+  live-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: 免登录探针（模型目录 + 401 形状）
+        run: node test/probe-live.mjs
+        continue-on-error: true

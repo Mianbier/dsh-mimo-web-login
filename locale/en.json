@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "title": "MiMo Web Login",
+    "description": "Drive the DSH agent with your Xiaomi MiMo AI Studio web session — no API key required."
+  },
+  "panel": {
+    "title": "MiMo Web Login",
+    "subtitle": "Use your aistudio.xiaomimimo.com session to drive the agent",
+    "status": "Login status",
+    "loggedIn": "Signed in",
+    "loggedOut": "Not signed in",
+    "account": "Current account",
+    "accounts": "Accounts",
+    "logout": "Sign out",
+    "loginNew": "Add account",
+    "loginBrowser": "Sign in with a browser window",
+    "tokenManual": "Paste cookies manually",
+    "verify": "Verify all",
+    "refresh": "Refresh",
+    "switch": "Switch",
+    "remove": "Remove",
+    "test": "Test connection",
+    "models": "Models",
+    "settings": "Settings",
+    "dataDir": "Data location",
+    "risk": "Risk notes",
+    "capturedAt": "Captured",
+    "verifiedAt": "Last verified",
+    "expiresHint": "serviceToken expires in about 24 hours; sign in again when it does.",
+    "busy": "Working…",
+    "save": "Save",
+    "saved": "Saved"
+  }
+}

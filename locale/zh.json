@@ -1,0 +1,34 @@
+{
+  "meta": {
+    "title": "MiMo 网页登录",
+    "description": "用小米 MiMo AI Studio 网页端的登录态驱动 DSH agent，无需 API Key。"
+  },
+  "panel": {
+    "title": "MiMo 网页登录",
+    "subtitle": "用 aistudio.xiaomimimo.com 的登录态驱动 agent",
+    "status": "登录状态",
+    "loggedIn": "已登录",
+    "loggedOut": "未登录",
+    "account": "当前账号",
+    "accounts": "账号库",
+    "logout": "退出当前账号",
+    "loginNew": "登录新账号",
+    "loginBrowser": "浏览器窗口登录",
+    "tokenManual": "手动粘贴 Cookie",
+    "verify": "校验全部",
+    "refresh": "刷新状态",
+    "switch": "切换",
+    "remove": "移除",
+    "test": "测试连通性",
+    "models": "模型",
+    "settings": "参数",
+    "dataDir": "数据位置",
+    "risk": "风险说明",
+    "capturedAt": "捕获时间",
+    "verifiedAt": "最近校验",
+    "expiresHint": "serviceToken 约 24 小时过期，过期后需要重新登录一次。",
+    "busy": "处理中…",
+    "save": "保存",
+    "saved": "已保存"
+  }
+}

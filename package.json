@@ -1,0 +1,60 @@
+{
+  "name": "dsh-mimo-web-login",
+  "version": "1.0.0",
+  "description": "Unofficial DSH plugin: use Xiaomi MiMo AI Studio web models as a DSH LLM provider (browser login capture + SSE streaming + prompting-based tool calls), provider route mimo-web",
+  "type": "module",
+  "private": false,
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/offline.mjs && node test/assembly.mjs && node test/render.mjs",
+    "test:offline": "node test/offline.mjs",
+    "test:assembly": "node test/assembly.mjs",
+    "test:render": "node test/render.mjs",
+    "test:live": "node test/probe-live.mjs",
+    "test:login": "node test/e2e-login.mjs",
+    "pack": "npm pack"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis-plugin",
+    "mimo",
+    "xiaomi",
+    "llm",
+    "provider",
+    "web-login"
+  ],
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  }
+}

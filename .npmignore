@@ -1,0 +1,13 @@
+# 只保留运行时真正需要的东西（npm 发布用）
+test/
+.github/
+*.tgz
+
+# 本地数据（万一它出现在这里，也绝不能进包）
+accounts.json
+active.json
+settings.json
+browser-profile/
+usage/
+*.log
+node_modules/

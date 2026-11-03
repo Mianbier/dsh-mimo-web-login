@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 打包产物
+*.tgz
+
+# 测试临时产物
+test/render-out.txt
+test/render-tree.txt
+test/asm-fail.txt
+*.tmp
+
+# 本地凭据 / 数据 —— 绝不能提交
+accounts.json
+active.json
+settings.json
+browser-profile/
+usage/
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

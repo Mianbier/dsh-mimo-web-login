@@ -1,0 +1,8 @@
+# dsh-mimo-web-login —— bundle 装配层
+#
+# 走官方装配（dsh plugin add / plugin_manager install_bundle）时插入本插件。
+# id 是稳定标识，用户后续覆盖配置时按 id 定位；name 必须与 package.json 的 name 一致。
+- insert:
+    - id: dsh-mimo-web-login
+      name: 'dsh-mimo-web-login'
+      config: {}
