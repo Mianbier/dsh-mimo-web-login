@@ -670,6 +670,57 @@ window.__ModuleLoader__.load({
             h('span', { 'data-mw-note': '' }, '关掉后官网左侧历史栏看不到插件发过的对话'),
           ),
         ),
+        // ── 语音：给 Aurabot 的本地接口脚本读 ──────────────────────────
+        //
+        // 为什么放在这个插件里而不是 Aurabot 面板：Aurabot 的音色下拉只认它
+        // 自己的 edge/CosyVoice/GPT-SoVITS 引擎，MiMo 是走「本地接口脚本」进来的，
+        // 那边没有 MiMo 音色的概念。放这儿既能选，又不会被 Aurabot 升级覆盖。
+        h(
+          'div',
+          { 'data-mw-card': '' },
+          h('div', { 'data-mw-card-title': '' }, '语音（MiMo TTS）'),
+          h(
+            'div',
+            { 'data-mw-note': '',
+            },
+            '这些值给 Aurabot 的 local/tts.mjs 用：它每次合成前读这份设置，所以改完立刻生效、不用重启。',
+          ),
+          h(
+            'div',
+            { 'data-mw-row': '' },
+            h('span', { 'data-mw-k': '' }, '音色'),
+            h(
+              'select',
+              {
+                'data-mw-input': '',
+                value: settings.ttsVoice ?? 'Chloe',
+                disabled: busy,
+                onChange: (e) => save({ ttsVoice: e.target.value }),
+              },
+              ...(status.ttsVoices ?? [{ id: 'Chloe', label: 'Chloe', desc: 'Sweet Dreamy' }]).map((v) =>
+                h('option', { key: v.id, value: v.id }, `${v.label} —— ${v.desc}`),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { 'data-mw-row': '' },
+            h('span', { 'data-mw-k': '' }, '风格指令'),
+            h('input', {
+              'data-mw-input': '',
+              type: 'text',
+              placeholder: '留空＝自然亲切地朗读',
+              defaultValue: settings.ttsStyle ?? '',
+              disabled: busy,
+              style: { flex: '1 1 320px' },
+              onBlur: (event) => {
+                const value = String(event.target.value)
+                if (value !== (settings.ttsStyle ?? '')) save({ ttsStyle: value })
+              },
+            }),
+            h('span', { 'data-mw-note': '' }, '例如「轻快上扬，带着压抑不住的激动与小骄傲」'),
+          ),
+        ),
         h(
           'div',
           { 'data-mw-card': '' },

@@ -213,7 +213,7 @@ const cases = [
     ['今天', '连通性测试', '发送测试', '近 7 天']],
   ['SettingsTab', globalThis.__mwbiz__.SettingsTab,
     () => renderComponent(() => render(createElement(globalThis.__mwbiz__.SettingsTab, { status: statusPayload, busy: false, act: mockApi.act, reload: mockApi.reload })), 'SettingsTab'),
-    ['默认思考', '网页搜索', '上下文窗口', '单轮最多图片', '恢复默认']],
+    ['默认思考', '网页搜索', '上下文窗口', '单轮最多图片', '恢复默认', '语音（MiMo TTS）', '音色', '风格指令']],
   ['AboutTab', globalThis.__mwbiz__.AboutTab,
     () => renderComponent(() => render(createElement(globalThis.__mwbiz__.AboutTab, { status: statusPayload, models: modelsPayload.models })), 'AboutTab'),
     ['关于', '版本', 'provider', '传输层', '风险说明']],

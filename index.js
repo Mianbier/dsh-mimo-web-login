@@ -20,6 +20,7 @@ import { noteCall, resetUsage, summarize } from './lib/usage.js'
 import {
   DEFAULT_SETTINGS,
   TOKEN_TTL_MS,
+  TTS_VOICES,
   activeAccountId,
   currentAccount,
   describeAccount,
@@ -248,6 +249,8 @@ export function apply(ctx, config = {}) {
               })),
               settings,
               defaults: DEFAULT_SETTINGS,
+              // 音色清单：面板下拉用。放服务端是为了只维护一份（lib/store.js）。
+              ttsVoices: TTS_VOICES,
               capabilities: {
                 ...caps,
                 // 适配器是否真的挂到了 llm 上（和 DeepSeek 面板那行「适配器注册」对齐）。
