@@ -116,20 +116,27 @@ assert.ok(registered, '客户端模块没有注册到 __ModuleLoader__')
 log(`✓ 模块已注册：id=${registered.id}`)
 
 let panelComp = null
-const business = {}
-const businessNames = ['AccountTab', 'ModelTab', 'UsageTab', 'SettingsTab', 'AboutTab']
+const registeredSlots = []
 registered.mod.apply({
   effect(fn) { const c = fn(); if (typeof c === 'function') disposers.push(c) },
   slots: {
     inject(name, register) { register() },
     register(options, component) {
+      registeredSlots.push({ name: options.name, id: options.id })
       if (options.id === 'mimo-web-login') panelComp = component
       return () => {}
     },
   },
 })
 assert.ok(panelComp, '没有注册 settings.section 面板')
-log('✓ apply() 注册了 settings.section 面板')
+log(`✓ apply() 注册了 ${registeredSlots.length} 个槽位：${registeredSlots.map((s) => s.name).join(' / ')}`)
+
+// 「网页版」页签和 guest 宿主是可选能力，注册成功即可（槽位不可用时会 warn 降级）
+const hasView = registeredSlots.some((s) => s.name === 'conversation.view')
+const hasOverlay = registeredSlots.some((s) => s.name === 'shell.overlay')
+assert.ok(hasView, '应注册 conversation.view（网页版页签）')
+assert.ok(hasOverlay, '应注册 shell.overlay（内置浏览器宿主）')
+log('✓ 网页版页签 + 内置浏览器宿主均已注册')
 
 // ── 段 1：完整 Panel（默认 account 页签） ──────────────────────────────
 async function mountPanel() {

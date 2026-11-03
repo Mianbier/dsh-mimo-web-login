@@ -257,12 +257,12 @@ window.__ModuleLoader__.load({
             value: loggedIn ? `${fmtTime(account.capturedAt)}（距今 ${ageText}）` : '—',
           }),
           h(Check, {
-            ok: account?.stale ? false : loggedIn ? true : undefined,
-            label: '登录态寿命',
+            ok: loggedIn ? true : undefined,
+            label: '登录态有效',
             value: loggedIn
-              ? account?.stale
-                ? `已超过 24 小时（serviceToken 通常约 24 小时过期，建议重新登录）`
-                : `约 24 小时，还剩 ${fmtDuration(Math.max(0, (d.tokenTtlMs ?? 0) - (d.tokenAgeMs ?? 0)))}`
+              ? account?.lastError
+                ? '服务端拒绝过（见下方最近失败）'
+                : '正常 —— 只有服务端返回 401 才算失效'
               : '—',
           }),
           account?.lastError
@@ -345,7 +345,8 @@ window.__ModuleLoader__.load({
                     { 'data-mw-row': '' },
                     h('span', { 'data-mw-v': '' }, acc.displayName || acc.id),
                     acc.current ? h(Pill, { tone: 'good' }, '当前') : null,
-                    acc.stale ? h(Pill, { tone: 'warn' }, '可能已过期') : null,
+                    // 不再按时间标「可能已过期」—— 那条推断在真机上是错的。
+                    // 只有服务端真的拒过（lastError）才提示重新登录。
                     acc.lastError ? h(Pill, { tone: 'bad' }, '需重新登录') : null,
                   ),
                   h(
@@ -730,7 +731,7 @@ window.__ModuleLoader__.load({
                 '要求稳定性请改用小米官方的 MiMo API（OpenAI 兼容，用 API Key）。',
             ),
           ),
-          h('div', { 'data-mw-note': '' }, 'serviceToken 约 24 小时过期；过期后普通对话可能还能用，但多模态会静默失效 —— 面板会按 24 小时标「可能已过期」。'),
+          h('div', { 'data-mw-note': '' }, '登录态能撑多久由**服务端**决定，可能远超 24 小时。面板只在服务端真的返回 401 时才提示重新登录，不按时间瞎猜。'),
         ),
       )
     }
@@ -848,7 +849,7 @@ window.__ModuleLoader__.load({
           { 'data-mw-h': '' },
           'MiMo 网页登录',
           h(Pill, { tone: status.loggedIn ? 'good' : 'bad' }, status.loggedIn ? '已登录' : '未登录'),
-          status.account?.stale ? h(Pill, { tone: 'warn' }, '可能已过期') : null,
+          status.account?.lastError ? h(Pill, { tone: 'bad' }, '需重新登录') : null,
           busy ? h('span', { 'data-mw-note': '' }, busy === 'login' ? '登录进行中…' : '处理中…') : null,
         ),
         h('div', { 'data-mw-note': '' }, '用 aistudio.xiaomimimo.com 网页端的登录态驱动 DSH agent，不需要 API Key。'),
@@ -876,6 +877,203 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ── 内置浏览器（「网页版」页签）────────────────────────────────────
+    //
+    // 照搬 dsh-deepseek-web-login 的做法：用 DSH 自带的 Chromium guest
+    // （Electron `<webview>`），把 aistudio.xiaomimimo.com 真正跑起来。
+    //
+    // 它的价值：网页端把它当"一个真人开着的页面"，比纯 HTTP 请求更像人。
+    // **它不参与发消息** —— 发送仍走 adapter 的网络通路，这里只是让站点活着。
+    //
+    // 三条硬约束（来自 DSH 主进程 `will-attach-webview` 门禁，别猜）：
+    //   1. `src` 必须**精确**等于 `about:blank#<lease>`（lease 来自 `acquire()`）
+    //   2. `partition` 必须等于 `acquire()` 返回的那个
+    //   3. bridge 只在**主窗口主 frame** 上（`globalThis.dshDesktop.browser`，
+    //      protocolVersion === 1）
+    const SITE_URL = 'https://aistudio.xiaomimimo.com/'
+
+    /** 取内置浏览器 bridge；没有就返回 undefined（降级，不让插件崩）。 */
+    function browserBridge() {
+      const desktop = globalThis.dshDesktop
+      const browser = desktop?.browser
+      if (!browser || browser.protocolVersion !== 1) return undefined
+      return browser
+    }
+
+    /** guest 的状态（模块级单例，跨页签共享）。 */
+    const guestState = {
+      running: false,
+      note: '',
+      lease: '',
+      listeners: new Set(),
+      element: null,
+      hostNode: null,
+      rect: null,
+    }
+    const guestEmit = () => {
+      for (const fn of guestState.listeners) {
+        try {
+          fn({ running: guestState.running, note: guestState.note })
+        } catch {
+          /* 订阅者出错别影响别人 */
+        }
+      }
+    }
+
+    /** 启动内置浏览器：拿到 lease → 建 `<webview>` → 挂到宿主节点。 */
+    async function startGuest() {
+      if (guestState.running) return true
+      const bridge = browserBridge()
+      if (!bridge) {
+        guestState.note = '本环境没有内置浏览器通道（主窗口未暴露 dshDesktop.browser）'
+        guestEmit()
+        return false
+      }
+      const node = guestState.hostNode
+      if (!node) {
+        guestState.note = '宿主节点还没挂上'
+        guestEmit()
+        return false
+      }
+      try {
+        // 清掉可能残留的旧 webview
+        for (const stale of Array.from(node.querySelectorAll('webview'))) {
+          try {
+            stale.remove()
+          } catch {
+            /* ignore */
+          }
+        }
+        const reservation = await bridge.acquire('mimo-web-login')
+        guestState.lease = reservation.lease
+        const view = document.createElement('webview')
+        view.setAttribute('name', reservation.lease)
+        view.setAttribute('partition', reservation.partition)
+        view.setAttribute('allowpopups', '')
+        view.setAttribute('src', `about:blank#${reservation.lease}`)
+        // 尺寸/显示照抄 dsh-webin：display:flex 是必须的 ——
+        // Electron 的 <webview> 内部是 iframe，靠父级 flex 拉伸；
+        // 写成 block 会拿不到高度、回落到默认 150px。
+        view.style.width = '100%'
+        view.style.height = '100%'
+        view.style.display = 'flex'
+        view.style.border = '0'
+        view.addEventListener('dom-ready', () => {
+          try {
+            view.loadURL(SITE_URL)
+          } catch {
+            /* ignore */
+          }
+        })
+        node.appendChild(view)
+        guestState.element = view
+        guestState.running = true
+        guestState.note = ''
+        guestEmit()
+        return true
+      } catch (error) {
+        guestState.note = `启动失败：${error?.message ?? error}`
+        guestEmit()
+        return false
+      }
+    }
+
+    /** 停掉内置浏览器。 */
+    function stopGuest() {
+      const node = guestState.hostNode
+      if (node) {
+        for (const child of Array.from(node.querySelectorAll('webview'))) {
+          try {
+            child.remove()
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      guestState.element = null
+      guestState.running = false
+      guestEmit()
+    }
+
+    /**
+     * guest 的**永久宿主**：挂在 `shell.overlay`（root scope，永不卸载）。
+     *
+     * 🔴 为什么不能放在页签里：Electron 的 `<webview>` 一旦从 DOM 摘除再插回
+     * 就会**重新加载**，而它的全部价值就是"一直活着"。
+     */
+    function GuestHost() {
+      const ref = useRef(null)
+      useEffect(() => {
+        const node = ref.current
+        if (!node) return
+        guestState.hostNode = node
+        return () => {
+          if (guestState.hostNode === node) guestState.hostNode = null
+        }
+      }, [])
+      return h('div', {
+        ref,
+        'data-mw-guest-host': '',
+        style: {
+          position: 'fixed',
+          inset: 0,
+          zIndex: 0,
+          // 不显示时不占位；页签里另有"占位符"把矩形告诉它。
+          display: guestState.running ? 'block' : 'none',
+          pointerEvents: 'none',
+        },
+      })
+    }
+
+    /** 「网页版」页签：真正的浏览器在 GuestHost 里，这里只放启动按钮与说明。 */
+    function WebViewTab() {
+      const [state, setState] = useState({ running: guestState.running, note: guestState.note })
+      useEffect(() => {
+        const listener = (next) => setState(next)
+        guestState.listeners.add(listener)
+        return () => guestState.listeners.delete(listener)
+      }, [])
+      return h(
+        'div',
+        { 'data-mw-webview': '', style: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16 } },
+        h(
+          'div',
+          { 'data-mw-card': '' },
+          h('div', { 'data-mw-card-title': '' }, '内置浏览器'),
+          h(
+            'div',
+            { 'data-mw-note': '' },
+            '这是 DSH 自带的 Chromium 页面，直接打开 aistudio.xiaomimimo.com。' +
+              '它让网页端看到"有一个真人开着的页面"，比纯请求更像人；**发消息仍走插件的网络通路**，这里的对话不会回显到 DSH。',
+          ),
+          state.note ? h('div', { 'data-mw-msg': '', 'data-warn': '' }, state.note) : null,
+          h(
+            'div',
+            { 'data-mw-row': '', style: { marginTop: 6 } },
+            h(
+              'button',
+              {
+                'data-mw-btn': '',
+                'data-primary': '',
+                type: 'button',
+                onClick: async () => {
+                  if (state.running) {
+                    stopGuest()
+                    setState({ running: false, note: guestState.note })
+                  } else {
+                    const ok = await startGuest()
+                    setState({ running: ok, note: guestState.note })
+                  }
+                },
+              },
+              state.running ? '关闭内置浏览器' : '启动内置浏览器',
+            ),
+            h('span', { 'data-mw-pill': '', ...(state.running ? { 'data-good': '' } : { 'data-warn': '' }) }, state.running ? '运行中' : '未启动'),
+          ),
+        ),
+      )
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
@@ -892,6 +1090,27 @@ window.__ModuleLoader__.load({
             h(Panel),
           ),
         )
+
+        // 「网页版」页签（与 对话 / 轨迹 并排）。槽位不可用时只降级，不让插件崩。
+        try {
+          slots.inject('conversation.view', () =>
+            slots.register(
+              { name: 'conversation.view', id: 'mimo-web-login-view', order: 30, label: () => '网页版' },
+              WebViewTab,
+            ),
+          )
+        } catch (error) {
+          console.warn('[mimo-web] conversation.view 槽位不可用，网页版页签将不可见：', error)
+        }
+
+        // guest 的永久宿主（root scope，永不卸载）。
+        try {
+          slots.inject('shell.overlay', () =>
+            slots.register({ name: 'shell.overlay', id: 'mimo-web-login-guest' }, GuestHost),
+          )
+        } catch (error) {
+          console.warn('[mimo-web] shell.overlay 槽位不可用，内置浏览器面板将不可用：', error)
+        }
       },
     }
   },
