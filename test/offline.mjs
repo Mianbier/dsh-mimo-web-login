@@ -141,6 +141,47 @@ test('围栏里混入杂行时仍能抢救出调用', () => {
   assert.equal(text, '', '救出来之后不该再漏成正文')
 })
 
+/**
+ * 真实事故（用户报的）：模型写 Python 文件时**文件内容里自带三个反引号**
+ * （docstring 里嵌 markdown 代码块、正则里匹配围栏）。
+ *
+ * 旧解析器用「非贪婪匹配到闭合围栏」的正则 ⇒ 会在**内容里那个 ```** 处提前收尾，
+ * JSON 被截断、解析失败，于是整个调用被当正文漏出去，模型还以为"工具调用失败"。
+ *
+ * 正解是照 dsh-deepseek-web-login 的做法：按**花括号配平**取 JSON，
+ * 内容里的反引号只是普通字符。
+ */
+test('文件内容里含三个反引号时，调用仍能完整解析（配平提取）', () => {
+  const pyLines = [
+    '"""',
+    '用法：',
+    '```python',
+    'client.chat("你好")',
+    '```',
+    '"""',
+    'import re',
+    'PATTERN = re.compile(r"^\\s*```(\\w*)\\s*$")',
+  ]
+  const content = pyLines.join('\n')
+  const json = JSON.stringify({
+    tool_calls: [{ name: 'write', arguments: { file_path: 'C:\\x\\mimo_client.py', content } }],
+  })
+
+  for (const wrap of [
+    `\`\`\`dsh-tool\n${json}\n\`\`\``,
+    `\`\`\`\n${json}\n\`\`\``,
+    `\`\`\`json\n${json}\n\`\`\``,
+    json,
+  ]) {
+    const { calls } = extractToolCalls(wrap)
+    assert.equal(calls.length, 1, `没解析出来：${wrap.slice(0, 60)}`)
+    const args = JSON.parse(calls[0].arguments)
+    assert.ok(args.content.includes('```python'), '内容里的反引号被截断了')
+    assert.ok(args.content.includes('strip' ) || args.content.includes('PATTERN'), '内容尾部丢了')
+    assert.equal(args.file_path, 'C:\\x\\mimo_client.py')
+  }
+})
+
 test('合法转义 \\n 不会被静默变成换行符', () => {
   // 这一条是真实事故形状：`C:\note.txt` 里的 `\n` 是**合法** JSON 转义，
   // JSON.parse 会成功但把路径吃掉一半 —— 工具于是跑到一个不存在的路径上。
