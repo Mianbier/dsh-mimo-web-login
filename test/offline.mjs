@@ -212,10 +212,21 @@ test('超预算时把省略的工具名说出来', () => {
   assert.ok(/tool_\d+/.test(section), '应列出被省略的工具名')
 })
 
-test('协议说明包含了禁止项', () => {
+/**
+ * 协议措辞是**真机试出来的**，这里的断言锁住"让模型肯照做"的那几个特征：
+ *
+ * 实测：MiMo 网页端自带的系统提示会跟"调用工具"的说法打架，模型直接拒绝
+ * （"我没有 mkdir_test 这个工具"）。改用"动作指令 / 按格式输出"的框架后，
+ * 同样的内容它就照做了。所以提示词必须是**格式约定**的口吻，
+ * 且明确不许它自作主张拒绝。
+ */
+test('协议说明是「格式约定」口吻，且不许模型自己拒绝', () => {
   const text = toolProtocolInstructions()
-  assert.ok(text.includes(CALL_OPEN))
-  assert.ok(text.includes('antml:invoke'), '必须明确劝阻 antml 方言')
+  assert.ok(text.includes(CALL_OPEN), '必须给出格式标记')
+  assert.ok(text.includes(CALL_CLOSE))
+  assert.ok(text.includes('动作指令'), '要用"动作指令"框架，不能写成"调用工具"')
+  assert.ok(text.includes('我做不到'), '必须明确告诉它不要擅自拒绝')
+  assert.ok(text.includes('一字不差'), '格式要求要写得足够硬')
 })
 
 // ── HTTP 客户端（假 fetch） ─────────────────────────────────────────────
