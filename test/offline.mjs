@@ -38,8 +38,8 @@ async function testAsync(name, fn) {
 
 // ── 工具协议解析 ────────────────────────────────────────────────────────
 
-test('解析标准调用块', () => {
-  const raw = `${CALL_OPEN}\n{"name":"read","arguments":{"file_path":"/tmp/a.txt"}}\n${CALL_CLOSE}`
+test('解析标准调用块（dsh-tool 围栏 + tool_calls）', () => {
+  const raw = '```dsh-tool\n' + '{"tool_calls":[{"name":"read","arguments":{"file_path":"/tmp/a.txt"}}]}' + '\n```'
   const { calls, text } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].name, 'read')
@@ -47,11 +47,8 @@ test('解析标准调用块', () => {
   assert.equal(text, '')
 })
 
-test('解析多个调用块', () => {
-  const raw = [
-    `${CALL_OPEN}{"name":"a","arguments":{}}${CALL_CLOSE}`,
-    `${CALL_OPEN}{"name":"b","arguments":{"x":1}}${CALL_CLOSE}`,
-  ].join('\n')
+test('一个 tool_calls 数组里放多个调用', () => {
+  const raw = '```dsh-tool\n' + '{"tool_calls":[{"name":"a","arguments":{}},{"name":"b","arguments":{"x":1}}]}' + '\n```'
   const { calls } = extractToolCalls(raw)
   assert.equal(calls.length, 2)
   assert.equal(calls[0].name, 'a')
@@ -59,29 +56,29 @@ test('解析多个调用块', () => {
 })
 
 test('调用块外的正文被保留', () => {
-  const raw = `我先看一下。\n${CALL_OPEN}{"name":"read","arguments":{}}${CALL_CLOSE}\n然后告诉你。`
+  const raw = '我先看一下。\n```dsh-tool\n{"tool_calls":[{"name":"read","arguments":{}}]}\n```\n然后告诉你。'
   const { calls, text } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   assert.ok(text.includes('我先看一下'))
   assert.ok(text.includes('然后告诉你'))
 })
 
-test('容忍 markdown 围栏包裹', () => {
-  const raw = '```json\n{"name":"search","arguments":{"q":"x"}}\n```'
+test('容忍忘了写 dsh-tool 的普通围栏', () => {
+  const raw = '```json\n{"tool_calls":[{"name":"search","arguments":{"q":"x"}}]}\n```'
   const { calls } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].name, 'search')
 })
 
-test('容忍裸 JSON（模型无视协议）', () => {
-  const raw = '好的：\n{"name":"list_files","arguments":{"path":"."}}'
+test('容忍裸 JSON（模型无视协议没写围栏）', () => {
+  const raw = '好的：\n{"tool_calls":[{"name":"list_files","arguments":{"path":"."}}]}'
   const { calls } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].name, 'list_files')
 })
 
 test('Windows 路径不被静默破坏（\\n 是合法转义但会吃掉路径）', () => {
-  const raw = `${CALL_OPEN}{"name":"read","arguments":{"file_path":"C:\\Users\\me\\new.txt"}}${CALL_CLOSE}`
+  const raw = '```dsh-tool\n' + '{"tool_calls":[{"name":"read","arguments":{"file_path":"C:\\\\Users\\\\me\\\\new.txt"}}]}' + '\n```'
   const { calls } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   const args = JSON.parse(calls[0].arguments)
@@ -92,8 +89,8 @@ test('Windows 路径不被静默破坏（\\n 是合法转义但会吃掉路径�
 
 test('非法 JSON 里的单反斜杠被修复', () => {
   // 用 String.raw 构造**真正**的非法 JSON：模型输出的是字面单反斜杠。
-  // （直接写 '...\Users...' 的话 \U 不是合法 JS 转义，字符串在进函数前就已经坏了。）
-  const raw = String.raw`${CALL_OPEN}{"name":"read","arguments":{"file_path":"C:\Users\me\a.txt"}}${CALL_CLOSE}`
+  const body = String.raw`{"tool_calls":[{"name":"read","arguments":{"file_path":"C:\Users\me\a.txt"}}]}`
+  const raw = '```dsh-tool\n' + body + '\n```'
   const { calls } = extractToolCalls(raw)
   assert.equal(calls.length, 1)
   const args = JSON.parse(calls[0].arguments)
@@ -103,7 +100,8 @@ test('非法 JSON 里的单反斜杠被修复', () => {
 test('合法转义 \\n 不会被静默变成换行符', () => {
   // 这一条是真实事故形状：`C:\note.txt` 里的 `\n` 是**合法** JSON 转义，
   // JSON.parse 会成功但把路径吃掉一半 —— 工具于是跑到一个不存在的路径上。
-  const raw = String.raw`${CALL_OPEN}{"name":"read","arguments":{"file_path":"C:\note.txt"}}${CALL_CLOSE}`
+  const body = String.raw`{"tool_calls":[{"name":"read","arguments":{"file_path":"C:\note.txt"}}]}`
+  const raw = '```dsh-tool\n' + body + '\n```'
   const { calls } = extractToolCalls(raw)
   const args = JSON.parse(calls[0].arguments)
   assert.equal(args.file_path, 'C:\\note.txt')
@@ -111,7 +109,7 @@ test('合法转义 \\n 不会被静默变成换行符', () => {
 })
 
 test('解析失败时正文不被吞掉', () => {
-  const raw = `${CALL_OPEN}这不是 JSON${CALL_CLOSE}`
+  const raw = '```dsh-tool\n这不是 JSON\n```'
   const { calls, text } = extractToolCalls(raw)
   assert.equal(calls.length, 0)
   assert.ok(text.includes('这不是 JSON'))
@@ -213,20 +211,19 @@ test('超预算时把省略的工具名说出来', () => {
 })
 
 /**
- * 协议措辞是**真机试出来的**，这里的断言锁住"让模型肯照做"的那几个特征：
+ * 协议形状**照搬 dsh-deepseek-web-login**，这里的断言锁住那套形状不被改坏。
  *
- * 实测：MiMo 网页端自带的系统提示会跟"调用工具"的说法打架，模型直接拒绝
- * （"我没有 mkdir_test 这个工具"）。改用"动作指令 / 按格式输出"的框架后，
- * 同样的内容它就照做了。所以提示词必须是**格式约定**的口吻，
- * 且明确不许它自作主张拒绝。
+ * 为什么用它那套：````dsh-tool` 围栏 + `{"tool_calls":[...]}` 是 OpenAI 原生
+ * 字段名，模型对"围栏里放 JSON"这个形状极熟，而且天然不会被理解成
+ * "我要假装调用工具"。我自己发明的 XML 标记则会被模型的先验知识顶回来。
  */
-test('协议说明是「格式约定」口吻，且不许模型自己拒绝', () => {
+test('协议形状与 DeepSeek 插件一致（围栏 + tool_calls）', () => {
   const text = toolProtocolInstructions()
-  assert.ok(text.includes(CALL_OPEN), '必须给出格式标记')
-  assert.ok(text.includes(CALL_CLOSE))
-  assert.ok(text.includes('动作指令'), '要用"动作指令"框架，不能写成"调用工具"')
-  assert.ok(text.includes('我做不到'), '必须明确告诉它不要擅自拒绝')
-  assert.ok(text.includes('一字不差'), '格式要求要写得足够硬')
+  assert.ok(text.includes('```dsh-tool'), '必须用 dsh-tool 围栏')
+  assert.ok(text.includes('"tool_calls"'), '必须用 tool_calls 数组（OpenAI 原生形状）')
+  assert.ok(text.includes('arguments'), '必须说明 arguments 字段')
+  // 明确劝阻尖括号标记 —— 那会漏进可见正文
+  assert.ok(/XML\/HTML|<tool_calls>|invoke/.test(text), '要明确劝阻 XML 方言')
 })
 
 // ── HTTP 客户端（假 fetch） ─────────────────────────────────────────────
