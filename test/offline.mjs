@@ -97,6 +97,50 @@ test('非法 JSON 里的单反斜杠被修复', () => {
   assert.equal(args.file_path, 'C:\\Users\\me\\a.txt')
 })
 
+/**
+ * 真实事故（用户截图）：模型把参数**平铺在调用对象上**，而不是放进 `arguments`。
+ *
+ * ```json
+ * {"tool_calls":[{"name":"pwsh","command":"...","workdir":"...","timeoutMs":120000}]}
+ * ```
+ *
+ * 旧解析器只认 `arguments` / `parameters` / `args` 三个键名 ⇒ 参数被丢光，
+ * 变成 `pwsh {}` 的空调用，执行失败后整块 JSON 又被当作正文漏给用户。
+ */
+test('参数平铺在调用对象上也能解析（不是 arguments 嵌套）', () => {
+  const body = '{"tool_calls":[{"name":"pwsh","command":"echo hi","workdir":"C:\\\\Users\\\\x","timeoutMs":120000}]}'
+  const raw = '```dsh-tool\n' + body + '\n```'
+  const { calls } = extractToolCalls(raw)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].name, 'pwsh')
+  const args = JSON.parse(calls[0].arguments)
+  assert.equal(args.command, 'echo hi', `命令不该丢，实际：${calls[0].arguments}`)
+  assert.equal(args.workdir, 'C:\\Users\\x')
+  assert.equal(args.timeoutMs, 120000)
+  // 元信息不该被当成参数混进去
+  assert.equal(args.name, undefined)
+  assert.equal(args.description, undefined)
+})
+
+/**
+ * 真实事故：模型自己说"围栏里多了一行字符导致格式坏了" —— 整段 JSON.parse 失败，
+ * 于是整个调用被当正文漏出去。这种脏数据要能从里面救出 JSON。
+ */
+test('围栏里混入杂行时仍能抢救出调用', () => {
+  const raw = [
+    '```dsh-tool',
+    '下面是要执行的调用：',
+    '{"tool_calls":[{"name":"pwsh","command":"echo hi"}]}',
+    '注意 workdir 是项目根',
+    '```',
+  ].join('\n')
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 1, `没救出来，正文还剩：${text}`)
+  assert.equal(calls[0].name, 'pwsh')
+  assert.equal(JSON.parse(calls[0].arguments).command, 'echo hi')
+  assert.equal(text, '', '救出来之后不该再漏成正文')
+})
+
 test('合法转义 \\n 不会被静默变成换行符', () => {
   // 这一条是真实事故形状：`C:\note.txt` 里的 `\n` 是**合法** JSON 转义，
   // JSON.parse 会成功但把路径吃掉一半 —— 工具于是跑到一个不存在的路径上。
