@@ -193,6 +193,50 @@ test('合法转义 \\n 不会被静默变成换行符', () => {
   assert.ok(!args.file_path.includes('\n'), '路径里不能有真换行')
 })
 
+/**
+ * 真实事故（用户截图）：模型想用 `edit` 把**字面 `\n`** 换成**真换行**，
+ * 但它在 `new_string` 的值里直接敲了个回车：
+ *
+ * ```json
+ * "new_string":"
+ * "
+ * ```
+ *
+ * JSON 不允许字符串里有裸换行 ⇒ 解析失败 ⇒ 整个调用被当正文漏出来，
+ * 用户看到的就是一段原始 JSON，而模型还在解释"这是我在调用编辑工具"。
+ */
+test('字符串里敲了裸换行也能解析，且语义是「真换行」', () => {
+  const NL = '\n'
+  const body =
+    '{"tool_calls":[{"name":"edit","arguments":{"file_path":"a.py",' +
+    '"old_string":"\\\\n","new_string":"' + NL + '","replace_all":true}}]}'
+  const raw = '```dsh-tool\n' + body + '\n```'
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 1, `没解析出来，正文=${text.slice(0, 60)}`)
+  const args = JSON.parse(calls[0].arguments)
+  // 模型的本意是"换成换行"，所以必须解析成**真换行**（1 字符），
+  // 不能变成字面反斜杠+n（2 字符）—— 否则等于把 \n 换成 \n，改动无效。
+  assert.equal(args.new_string, NL, `new_string 应是真换行，实际 ${JSON.stringify(args.new_string)}`)
+  assert.equal(args.old_string, '\\n', 'old_string 应保持字面反斜杠n')
+})
+
+/**
+ * 与上一条配套：**多行文件内容**里的真换行必须原样保留。
+ *
+ * 早期版本"扫全对象找控制字符就修"会把这里的换行全变成字面 `\n`，
+ * 写出来的 Python 文件全是"反斜杠n"，等于把文件写坏。
+ */
+test('写多行文件时 content 里的真换行不被改写', () => {
+  const NL = '\n'
+  const content = 'import os' + NL + 'def f():' + NL + '    pass'
+  const body = '{"tool_calls":[{"name":"write","arguments":{"file_path":"a.py","content":' + JSON.stringify(content) + '}}]}'
+  const raw = '```dsh-tool\n' + body + '\n```'
+  const { calls } = extractToolCalls(raw)
+  const args = JSON.parse(calls[0].arguments)
+  assert.ok(args.content.includes(NL), `content 里的真换行丢了：${JSON.stringify(args.content)}`)
+  assert.equal(args.content.split(NL).length, 3, '应有三行')
+})
+
 test('解析失败时正文不被吞掉', () => {
   const raw = '```dsh-tool\n这不是 JSON\n```'
   const { calls, text } = extractToolCalls(raw)
