@@ -639,8 +639,8 @@ window.__ModuleLoader__.load({
           'div',
           { 'data-mw-card': '' },
           h('div', { 'data-mw-card-title': '' }, '上下文与节流'),
-          num('maxPromptChars', 'prompt 字符上限', 20000, 800000, 10000, '每轮重发全量历史，这个值也是风控阀门'),
-          num('contextWindow', '上下文窗口', 32768, 1048576, 1024, '声明给 DSH 的窗口（实际受服务端限制）'),
+          num('maxPromptChars', 'prompt 字符上限', 20000, 1200000, 10000, '每轮重发全量历史，这个值也是风控阀门'),
+          num('contextWindow', '上下文窗口', 32768, 4194304, 1024, '声明给 DSH 的窗口（上游模型多标 1M）'),
           num('minIntervalMs', '请求最小间隔', 0, 30000, 100, '毫秒；固定间隔比随机间隔更像脚本'),
           num('idleTimeoutMs', '流空闲超时', 30000, 600000, 5000, '毫秒'),
           h(
