@@ -221,6 +221,56 @@ test('字符串里敲了裸换行也能解析，且语义是「真换行」', ()
 })
 
 /**
+ * 真机事故（用户截图，2026-11-04）：模型写 Python 时把 docstring 的
+ * `"""` 三对引号**没转义**就塞进 JSON 字符串：
+ *
+ *     "content":"# -*- coding: utf-8 -*-
+ *     """临时诊断"""        ← 这几个裸引号把 JSON 字符串提前闭合了
+ *     nc = Cradle()"}}]}
+ *
+ * 结果整块 `dsh-tool` 被当正文漏出去，用户看到的是一坨原始 JSON。
+ *
+ * 前面几层（转义换行、括号配平）都救不了这种 —— 它们不碰引号配对。
+ * 这一层按"真闭合引号后面必跟结构标记"的规律把裸引号转义掉。
+ */
+test('字符串里含未转义的裸双引号（docstring 的 """）也能解析', () => {
+  const NL = '\n'
+  const barePy = '"# -*- coding: utf-8 -*-' + NL +
+    '"""临时诊断"""' + NL +
+    'nc = Cradle()"'
+  const body = '{"tool_calls":[{"name":"write","arguments":{"file_path":"_diag.py","content":' + barePy + '}}]}'
+  const raw = '```dsh-tool\n' + body + '\n```'
+
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 1, `没解析出来，正文=${text.slice(0, 80)}`)
+  const args = JSON.parse(calls[0].arguments)
+  assert.equal(args.file_path, '_diag.py')
+  assert.equal(args.content.split(NL).length, 3, `应有三行，实际 ${JSON.stringify(args.content)}`)
+  assert.ok(args.content.includes('"""'), '内容里的 """ 必须完整保留')
+})
+
+test('同一块里两个调用 + 裸引号都能解析', () => {
+  const NL = '\n'
+  const barePy = '"# docstring' + NL + '"""说明"""' + NL + 'x = 1"'
+  const body =
+    '{"tool_calls":[{"name":"write","arguments":{"file_path":"a.py","content":' + barePy + '}},'
+    + '{"name":"bash","arguments":{"command":"python a.py"}}]}'
+  const { calls } = extractToolCalls('```dsh-tool\n' + body + '\n```')
+  assert.equal(calls.length, 2, '两个调用都要解析出来')
+  assert.equal(calls[0].name, 'write')
+  assert.equal(calls[1].name, 'bash')
+})
+
+test('正常 JSON 里的转义引号不会被引号修复改坏', () => {
+  const body = JSON.stringify({
+    tool_calls: [{ name: 'write', arguments: { file_path: 'a.py', content: 'x = "hello"' } }],
+  })
+  const { calls } = extractToolCalls('```dsh-tool\n' + body + '\n```')
+  assert.equal(calls.length, 1)
+  assert.equal(JSON.parse(calls[0].arguments).content, 'x = "hello"', '内容必须原样')
+})
+
+/**
  * 与上一条配套：**多行文件内容**里的真换行必须原样保留。
  *
  * 早期版本"扫全对象找控制字符就修"会把这里的换行全变成字面 `\n`，
