@@ -385,8 +385,11 @@ test('超预算时把省略的工具名说出来', () => {
     tools.push({ name: `tool_${i}`, description: 'x'.repeat(500), parameters: { type: 'object' } })
   }
   const section = buildToolSection(tools, 3000)
-  assert.ok(section.includes('没有描述'), '应给出省略提示')
+  // 文案照搬 DeepSeek（英文）；关键是**必须把省略的工具名列出来**，
+  // 否则模型连"还有哪些工具存在"都不知道，只能瞎猜名字和参数。
+  assert.ok(/omitted for length|NOT described/.test(section), '应给出省略提示')
   assert.ok(/tool_\d+/.test(section), '应列出被省略的工具名')
+  assert.ok(/do NOT guess/.test(section), '应明确要求别猜参数')
 })
 
 /**
@@ -1002,7 +1005,7 @@ await testAsync('v2 的 <think> 标签会被剥离到思考区', async () => {
  * 机制：finish chunk 带 `replayState.conversationId`，宿主会把它挂到 assistant
  * 消息的 `source.replayState` 上带回来；下一轮据此复用会话、只发增量。
  */
-await testAsync('续聊复用同一个 conversationId，并且只发增量', async () => {
+await testAsync('默认每条请求用全新会话（无状态全量，照搬 DeepSeek 的 new-session）', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
   const calls = []
   const adapter = createAdapter({
@@ -1035,6 +1038,7 @@ await testAsync('续聊复用同一个 conversationId，并且只发增量', asy
   }
   assert.ok(replay1?.conversationId, '第一轮 finish 必须带 replayState.conversationId')
   assert.equal(replay1.lastMessageId, 'm1')
+  assert.ok(replay1.headHash, 'replayState 应带 headHash（判断头部是否变化）')
   const firstConvId = calls[0].conversationId
 
   // 第二轮：把 replayState 挂到上一条 assistant 消息的 source 上带回来
@@ -1060,12 +1064,63 @@ await testAsync('续聊复用同一个 conversationId，并且只发增量', asy
   }
 
   const second = calls[calls.length - 1]
-  assert.equal(second.conversationId, firstConvId, `第二轮应复用同一个 conversationId，实际 ${second.conversationId} vs ${firstConvId}`)
-  // 增量：不应再包含第一句话，也不该重复系统提示
-  assert.ok(!second.query.includes('我叫大明'), `第二轮不该重发旧历史，实际：${second.query}`)
-  assert.ok(second.query.includes('我叫什么名字'), `第二轮应包含新问题，实际：${second.query}`)
-  assert.ok(!second.query.includes('你是一个助手。'), '增量不该重复系统提示')
+  // 默认**不复用会话**：服务端里没有历史，就不会和我们发的全量转写叠成两份
+  //（叠两份时模型会吐出交叠的损坏 JSON —— 真机事故）。
+  assert.notEqual(second.conversationId, firstConvId, '默认每条请求应换新会话（无状态）')
+  assert.ok(second.query.includes('你是一个助手。'), 'full 模式必须带系统提示')
+  assert.ok(second.query.includes('我叫大明'), 'full 模式应重发完整历史')
+  assert.ok(second.query.includes('我叫什么名字'), '应包含新问题')
   assert.equal(replay2.lastMessageId, 'm2')
+})
+
+/**
+ * chained 模式（显式打开）：只发增量，且**剔除模型回声**、**头部没变就不重发协议**。
+ * 这两条是照搬 DeepSeek 的核心优化；默认不开是因为它的代价（协议只活在链首）太大。
+ */
+await testAsync('chained 模式只发增量、剔回声、不重发未变的头部', async () => {
+  const { createAdapter } = await import('../lib/adapter.js')
+  const calls = []
+  const adapter = createAdapter({
+    getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false, saveConversationHistory: false, contextMode: 'chained' }),
+    logger: {},
+    fetchImpl: async (url, init) => {
+      const href = String(url)
+      if (href.includes('/bot/config')) {
+        return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (href.includes('/conversation/save')) {
+        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      calls.push(JSON.parse(init.body))
+      return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"收到"}\n\n', 'event: finish\ndata: {}\n\n'])
+    },
+  })
+
+  const p1 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+  let replay1
+  for await (const chunk of p1.stream({
+    model: 'mimo-v2.6-pro',
+    system: '你是一个助手。',
+    messages: [{ id: 'm1', role: 'user', content: [{ type: 'text', text: '第一句话：我叫大明' }] }],
+    tools: [],
+  })) {
+    if (chunk.type === 'finish') replay1 = chunk.replayState
+  }
+
+  const messages2 = [
+    { id: 'm1', role: 'user', content: [{ type: 'text', text: '第一句话：我叫大明' }] },
+    { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'mimo-web', model: 'mimo-v2.6-pro', replayState: replay1 }, content: [{ type: 'text', text: '收到' }] },
+    { id: 'm2', role: 'user', content: [{ type: 'text', text: '第二句话：我叫什么名字？' }] },
+  ]
+  const p2 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+  for await (const chunk of p2.stream({ model: 'mimo-v2.6-pro', system: '你是一个助手。', messages: messages2, tools: [] })) { /* drain */ }
+
+  const second = calls[calls.length - 1]
+  assert.ok(!second.query.includes('你是一个助手。'), `chained 不该重发未变的系统提示，实际：${second.query}`)
+  assert.ok(!second.query.includes('我叫大明'), 'chained 不该重发旧历史')
+  assert.ok(second.query.includes('我叫什么名字'), '应包含新问题')
+  assert.ok(!/Assistant:/.test(second.query), `chained 应剔除模型回声，实际：${second.query}`)
 })
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
