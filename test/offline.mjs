@@ -1155,6 +1155,60 @@ await testAsync('chained 模式只发增量、剔回声、不重发未变的头�
   assert.ok(!/Assistant:/.test(second.query), `chained 应剔除模型回声，实际：${second.query}`)
 })
 
+/**
+ * 真机事故（用户截图 2026-11-06）：连续三轮显示「已完成，用时 10 秒」，
+ * 但界面上**一个字都没有**。会话记录里是 `content: []` + `reason: completed`
+ * —— 空产出被当成正常结束，用户以为文件生成好了，实际什么都没有。
+ *
+ * 之前判据是 `!textBlock?.text`：模型只吐空白（`"\n"` / `"   "`）时 textBlock 存在，
+ * 判据为假 ⇒ 走正常完成路径 ⇒ 界面上就是空白。
+ * 现在改成 **trim 之后**判空，并且空文本块不再发 `block-end`。
+ */
+await testAsync('空/空白响应必须报错，不能静默「已完成」', async () => {
+  const { createAdapter } = await import('../lib/adapter.js')
+
+  const runCase = async (sseLines) => {
+    const adapter = createAdapter({
+      getAuth: () => ({ serviceToken: 't', userId: '1', xiaomichatbotPh: 'p' }),
+      getSettings: () => ({ thinking: true, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 5000, allowConcurrent: true, saveConversationHistory: false }),
+      logger: { warn: () => {}, debug: () => {} },
+      fetchImpl: async (url) => {
+        const href = String(url)
+        if (href.includes('/bot/config')) return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+        if (href.includes('/conversation/save')) return new Response(JSON.stringify({ code: 0, data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
+        return sseResponse(sseLines)
+      },
+    })
+    const prep = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+    let finish
+    const textBlocks = []
+    for await (const c of prep.stream({ model: 'mimo-v2.6-pro', system: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [] })) {
+      if (c.type === 'block-end' && c.block?.type === 'text') textBlocks.push(c.block)
+      if (c.type === 'finish') finish = c.reason
+    }
+    return { finish, textBlocks }
+  }
+
+  for (const [label, lines] of [
+    ['只有换行', ['event: message\ndata: {"messageType":"assistant","content":"\\n"}\n\n', 'event: finish\ndata: {}\n\n']],
+    ['只有空格', ['event: message\ndata: {"messageType":"assistant","content":"   "}\n\n', 'event: finish\ndata: {}\n\n']],
+    ['完全空流', ['event: dialog\ndata: {"id":"x"}\n\n', 'event: finish\ndata: {}\n\n']],
+  ]) {
+    const { finish, textBlocks } = await runCase(lines)
+    assert.equal(finish?.kind, 'error', `${label}：应报错，实际 ${JSON.stringify(finish)}`)
+    assert.equal(finish.failure.code, 'EMPTY_RESPONSE', `${label}：错误码应为 EMPTY_RESPONSE`)
+    assert.equal(textBlocks.length, 0, `${label}：不该产出空的文本块`)
+  }
+
+  // 反例：正常应答与工具调用不能被误伤
+  const normal = await runCase(['event: message\ndata: {"messageType":"assistant","content":"你好呀"}\n\n', 'event: finish\ndata: {}\n\n'])
+  assert.equal(normal.finish?.kind, 'stop', '正常应答应 stop')
+  assert.equal(normal.textBlocks.length, 1, '正常应答应有一个文本块')
+
+  const tool = await runCase(['event: message\ndata: {"messageType":"assistant","content":"```dsh-tool\\n{\\"tool_calls\\":[{\\"name\\":\\"pwsh\\",\\"arguments\\":{\\"command\\":\\"ls\\"}}]}\\n```"}\n\n', 'event: finish\ndata: {}\n\n'])
+  assert.equal(tool.finish?.kind, 'tool-calls', `工具调用应 tool-calls，实际 ${JSON.stringify(tool.finish)}`)
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)
