@@ -271,6 +271,38 @@ test('正常 JSON 里的转义引号不会被引号修复改坏', () => {
 })
 
 /**
+ * 真机事故（用户截图 2026-11-05）：模型把围栏名写成了**键名**，粘成这样：
+ *
+ *     {"tooldsh-tool
+ *     {"tool_calls":[{"name":"pwsh",…}]}
+ *
+ * 从第一个 `{` 配平会拿到那个坏对象（内含不配平的同级 `{`），于是解析永远失败，
+ * 整块漏成正文。用户看到的就是一坨 `{"tooldsh-tool`。
+ *
+ * 对策：先找**真正像调用**的 `{`（后面紧跟 `"tool_calls"`），再配平。
+ */
+test('围栏名被写成键名（{"tooldsh-tool）也能解析', () => {
+  const raw = '代码块\n{"tooldsh-tool\n{"tool_calls":[{"name":"pwsh","arguments":{"command":"where.exe python"}}]}'
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 1, `没解析出来，残留=${text.slice(0, 80)}`)
+  assert.equal(calls[0].name, 'pwsh')
+  assert.equal(JSON.parse(calls[0].arguments).command, 'where.exe python')
+  assert.ok(!text.includes('tooldsh-tool'), `残渣要清掉，实际残留：${JSON.stringify(text)}`)
+})
+
+/**
+ * 与上一条配套的**反例**：正文里"提到"围栏时不能被误判成调用，
+ * 否则模型一解释协议就被吃掉半句话。
+ */
+test('正文提到围栏与 tool_calls 时不误判为调用', () => {
+  const raw = '它用 ``dsh-tool` 围栏 + {"tool_calls":[...]} 这种写法。'
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 0, '不该误判')
+  assert.ok(text.includes('dsh-tool'), '正文应完整保留')
+  assert.ok(text.includes('这种写法'), '正文应完整保留')
+})
+
+/**
  * 与上一条配套：**多行文件内容**里的真换行必须原样保留。
  *
  * 早期版本"扫全对象找控制字符就修"会把这里的换行全变成字面 `\n`，
