@@ -1,6 +1,6 @@
 {
   "name": "dsh-mimo-web-login",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Unofficial DSH plugin: use Xiaomi MiMo AI Studio web models as a DSH LLM provider (browser login capture + SSE streaming + prompting-based tool calls), provider route mimo-web",
   "type": "module",
   "private": false,
@@ -23,12 +23,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/offline.mjs && node test/assembly.mjs && node test/render.mjs",
+    "test": "node scripts/sync-readme.mjs && node test/offline.mjs && node test/assembly.mjs && node test/render.mjs",
     "test:offline": "node test/offline.mjs",
     "test:assembly": "node test/assembly.mjs",
     "test:render": "node test/render.mjs",
+    "test:readme": "node scripts/sync-readme.mjs",
     "test:live": "node test/probe-live.mjs",
     "test:login": "node test/e2e-login.mjs",
+    "sync-readme": "node scripts/sync-readme.mjs --write",
     "pack": "npm pack"
   },
   "license": "Apache-2.0",

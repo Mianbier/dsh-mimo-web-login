@@ -30,6 +30,11 @@ jobs:
       - name: 渲染测试（面板五个页签）
         run: node test/render.mjs
 
+      # README 是 GitHub 的门面，必须和代码一致（版本号 / 测试数 / 默认值 / 章节）。
+      # 单独一步跑：失败信息一眼能看出是「文档落后」而不是「功能坏了」。
+      - name: README 与代码一致性
+        run: node scripts/sync-readme.mjs
+
   # 线上探针只在 Linux 跑一次 —— 它要打真实站点，重复跑没意义还容易被限流
   live-probe:
     runs-on: ubuntu-latest
