@@ -122,6 +122,73 @@ window.__ModuleLoader__.load({
       return String(Math.round(n))
     }
 
+    /**
+     * 从一段 `k=v; k2=v2` 或 JSON 里拆出三个必需的 cookie。
+     *
+     * 为什么要这个：让用户去 DevTools 里一个个找、一个个复制，既慢又容易抄错 ——
+     * `serviceToken` 少了 `xiaomichatbot_` 前缀就是 401 的经典原因。
+     * 直接把整段 cookie 串粘进来，这里负责挑出正确的三个。
+     *
+     * 宽容处理几种真实粘法：
+     *   - 浏览器 DevTools 的 `document.cookie` 输出（`k=v; k2=v2`）
+     *   - curl 的 `-b 'k=v; k2=v2'`
+     *   - 粘贴的 JSON（`{"k":"v"}`）
+     *   - 值外面包了引号（DevTools 复制有时会带 `"..."`）
+     */
+    const parseCookieString = (input) => {
+      const out = { serviceToken: '', userId: '', xiaomichatbotPh: '' }
+      const text = String(input ?? '').trim()
+      if (!text) return out
+
+      /** 把任意输入归一成 `{键: 值}`。 */
+      const pairs = new Map()
+      const put = (key, value) => {
+        const k = String(key ?? '').trim()
+        if (!k) return
+        // 去掉值外侧的引号与空白（DevTools 复制常带）
+        let v = String(value ?? '').trim()
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+        if (v) pairs.set(k, v)
+      }
+
+      if (text.startsWith('{')) {
+        try {
+          const obj = JSON.parse(text)
+          for (const [k, v] of Object.entries(obj ?? {})) put(k, v)
+        } catch {
+          /* 不是合法 JSON，退回分隔符解析 */
+        }
+      }
+
+      if (pairs.size === 0) {
+        // `k=v; k2=v2` —— 也容忍换行分隔
+        for (const chunk of text.split(/[;\n\r]+/)) {
+          const idx = chunk.indexOf('=')
+          if (idx <= 0) continue
+          put(chunk.slice(0, idx), chunk.slice(idx + 1))
+        }
+      }
+
+      const pick = (...names) => {
+        for (const name of names) {
+          const hit = pairs.get(name)
+          if (hit) return hit
+        }
+        // 再放宽一层：忽略大小写与前后空白
+        for (const name of names) {
+          for (const [k, v] of pairs) {
+            if (k.toLowerCase() === name.toLowerCase()) return v
+          }
+        }
+        return ''
+      }
+
+      out.serviceToken = pick('xiaomichatbot_serviceToken', 'serviceToken')
+      out.userId = pick('userId')
+      out.xiaomichatbotPh = pick('xiaomichatbot_ph')
+      return out
+    }
+
     /** 一行「✓ 某状态」——DeepSeek 面板那种诊断行的样式。 */
     function Check({ ok, label, value, tone }) {
       const mark = ok === true ? '✓' : ok === false ? '✗' : '·'
@@ -336,7 +403,71 @@ window.__ModuleLoader__.load({
               'div',
               { 'data-mw-card': '' },
               h('div', { 'data-mw-card-title': '' }, '手动粘贴 Cookie'),
-              h('div', { 'data-mw-note': '' }, '登录 aistudio.xiaomimimo.com 后按 F12 → Application → Cookies，复制这三个值（注意第一个名字带 xiaomichatbot_ 前缀）。'),
+              // 🔴 远程访问（Linux 服务器 + 浏览器从外面连）时，服务器**没有桌面**，
+              // `xdg-open` 必然失败 —— 你唯一能用的路就是在**你自己这台**浏览器里
+              // 打开登录页，再把 cookie 粘回来。所以这里必须给一个真链接，
+              // 而不是让人自己去地址栏敲。
+              h(
+                'div',
+                { 'data-mw-row': '' },
+                h(
+                  'a',
+                  {
+                    'data-mw-btn': '',
+                    href: 'https://aistudio.xiaomimimo.com/#/c',
+                    target: '_blank',
+                    rel: 'noreferrer noopener',
+                    style: { textDecoration: 'none', display: 'inline-block' },
+                  },
+                  '① 在新标签页打开登录页',
+                ),
+                h(
+                  'a',
+                  {
+                    'data-mw-btn': '',
+                    href: 'https://aistudio.xiaomimimo.com/#/ultra',
+                    target: '_blank',
+                    rel: 'noreferrer noopener',
+                    style: { textDecoration: 'none', display: 'inline-block' },
+                  },
+                  '（顺手打开 UltraSpeed 页）',
+                ),
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '② 在那个页面登录 → 按 F12 → Application → Cookies → https://aistudio.xiaomimimo.com，' +
+                  '复制这三个值（第一个名字带 xiaomichatbot_ 前缀）：',
+              ),
+              h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'xiaomichatbot_serviceToken / userId / xiaomichatbot_ph'),
+              // 一条命令把三个值打出来 —— 比让人在 DevTools 里一个个翻快得多，
+              // 而且不会抄错名字（`serviceToken` 少了前缀就是 401 的经典原因）。
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '③ 也可以在登录页的 Console 里粘这一行，它会把三个值直接打印出来：',
+              ),
+              h('pre', {
+                'data-mw-code': '',
+                style: {
+                  margin: '4px 0',
+                  padding: '8px 10px',
+                  overflowX: 'auto',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  background: 'rgba(127,127,127,.12)',
+                  borderRadius: 6,
+                  whiteSpace: 'pre',
+                },
+              }, `JSON.stringify(Object.fromEntries(
+  document.cookie.split('; ').map(s => s.split('='))
+    .filter(([k]) => /xiaomichatbot_|^userId$/.test(k))
+    .map(([k, ...v]) => [k, v.join('=')]), null, 1)`),
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '④ 把拿到的三个值粘到下面（也可以直接把整段 cookie 串粘进第一个框，会自动拆开）。',
+              ),
               h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_serviceToken', value: form.serviceToken, onChange: (e) => setForm((p) => ({ ...p, serviceToken: e.target.value })) }),
               h('input', { 'data-mw-input': '', placeholder: 'userId（纯数字）', value: form.userId, onChange: (e) => setForm((p) => ({ ...p, userId: e.target.value })) }),
               h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_ph', value: form.xiaomichatbotPh, onChange: (e) => setForm((p) => ({ ...p, xiaomichatbotPh: e.target.value })) }),
@@ -347,6 +478,33 @@ window.__ModuleLoader__.load({
                   'button',
                   { 'data-mw-btn': '', 'data-primary': '', type: 'button', disabled: busy || !form.serviceToken || !form.userId || !form.xiaomichatbotPh, onClick: doToken },
                   '保存并校验',
+                ),
+                h(
+                  'button',
+                  {
+                    'data-mw-btn': '',
+                    type: 'button',
+                    disabled: busy,
+                    title: '把整段 cookie 串（k=v; k2=v2）粘到剪贴板后点这里，自动拆成三个值',
+                    onClick: async () => {
+                      try {
+                        const text = await navigator.clipboard.readText()
+                        const parsed = parseCookieString(text)
+                        if (!parsed.serviceToken && !parsed.userId && !parsed.xiaomichatbotPh) {
+                          return { text: '剪贴板里没找到这三个 cookie，请确认复制的是 k=v; k2=v2 这种格式。', tone: 'warn' }
+                        }
+                        setForm((p) => ({
+                          serviceToken: parsed.serviceToken || p.serviceToken,
+                          userId: parsed.userId || p.userId,
+                          xiaomichatbotPh: parsed.xiaomichatbotPh || p.xiaomichatbotPh,
+                        }))
+                        return { text: '已从剪贴板填入，确认无误后点「保存并校验」。', tone: 'good' }
+                      } catch (error) {
+                        return { text: `读剪贴板失败（浏览器可能不给权限）：${String(error?.message ?? error).slice(0, 80)}`, tone: 'warn' }
+                      }
+                    },
+                  },
+                  '从剪贴板自动填充',
                 ),
               ),
             )
