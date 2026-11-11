@@ -169,6 +169,22 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // Firefox 的「存储 → Cookie」支持右键「全部复制」，出来是**制表符分隔的多列**：
+      //   名称\t值\t域\t路径\t过期时间\t大小\tHttpOnly\tSecure\tSameSite
+      // 每行一个 cookie，列之间是 \t。上面的 `=` 解析完全读不出来，所以单独处理：
+      // 只要某行的第一列是已知 cookie 名，就把第二列当值。
+      if (pairs.size === 0 || !pairs.has('xiaomichatbot_serviceToken')) {
+        for (const line of text.split(/\r?\n/)) {
+          const cols = line.split('\t')
+          if (cols.length < 2) continue
+          const key = cols[0].trim()
+          const value = cols[1].trim()
+          if (!key || !value) continue
+          // 只在"看起来像 cookie 名"时收，避免把表头或杂项当数据
+          if (/^[A-Za-z_][\w.-]{1,64}$/.test(key)) put(key, value)
+        }
+      }
+
       const pick = (...names) => {
         for (const name of names) {
           const hit = pairs.get(name)
@@ -516,24 +532,37 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { 'data-mw-note': '', style: { marginLeft: 12 } },
-                '· Chrome / Edge：「应用程式」(Application) → Cookie',
+                '· **Firefox（你在用的这个）**：F12 → 顶部那排标签找「存储」→ 左侧「Cookie」→ 点 https://aistudio.xiaomimimo.com',
               ),
               h(
                 'div',
                 { 'data-mw-note': '', style: { marginLeft: 12 } },
-                '· Firefox：「存储」(Storage) → Cookie（**不是**「应用程序」）',
+                '· Chrome / Edge：F12 → 「应用程式」(Application) → 左侧 Cookie → 同上',
               ),
               h(
                 'div',
                 { 'data-mw-note': '', style: { marginLeft: 12 } },
-                '然后在里面选 https://aistudio.xiaomimimo.com，复制这三个（第一个带 xiaomichatbot_ 前缀）：',
+                '右侧会出现一个表格，找这三行，点「值」那一格全选复制：',
               ),
-              h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'xiaomichatbot_serviceToken / userId / xiaomichatbot_ph'),
+              h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'xiaomichatbot_serviceToken（最长，带 + / =）'),
+              h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'userId（纯数字）'),
+              h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'xiaomichatbot_ph（短，末尾常有 ==）'),
               h(
                 'div',
                 { 'data-mw-note': '' },
-                '⚠️ `xiaomichatbot_serviceToken` 通常是 **HttpOnly** —— 用 Console 的 `document.cookie` 看不到它，' +
-                  '必须走上面的「存储/应用程式」面板。',
+                '⚠️ `xiaomichatbot_serviceToken` 通常是 **HttpOnly** —— Console 里 `document.cookie` 看不到它，' +
+                  '所以必须走「存储」面板（Firefox 的 Console 也看不到，别在那儿找）。',
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '💡 Firefox 的表格支持多选：按住 Ctrl 点三行 → 右键「复制」→ 直接粘到下面的大框，会一起拆开。',
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '💡 更快：Firefox 的「存储 → Cookie」列表上右键有「全部复制」，一次就能拷完整个表 —— ' +
+                  '直接粘到下面的大框，多余的 cookie 会被自动忽略。',
               ),
               // 如果 serviceToken 不是 HttpOnly，这行 Console 能一次把值打全，省得手抄。
               // 但 HttpOnly 的情况下它看不到 —— 上面的提示已经说明必须走存储面板。
@@ -561,11 +590,13 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { 'data-mw-note': '' },
-                '④ 把拿到的三个值粘到下面（也可以直接把整段 cookie 串粘进第一个框，会自动拆开）。',
+                '④ 把整段 cookie 粘到下面的框里（会自动拆成三个值），或者直接逐个填：',
               ),
-              h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_serviceToken', value: form.serviceToken, onChange: (e) => setForm((p) => ({ ...p, serviceToken: e.target.value })) }),
-              h('input', { 'data-mw-input': '', placeholder: 'userId（纯数字）', value: form.userId, onChange: (e) => setForm((p) => ({ ...p, userId: e.target.value })) }),
-              h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_ph', value: form.xiaomichatbotPh, onChange: (e) => setForm((p) => ({ ...p, xiaomichatbotPh: e.target.value })) }),
+              // 三个输入框保留"手填"能力：手改时清掉 rawCookies，
+              // 免得和大文本框的解析结果互相覆盖。
+              h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_serviceToken', value: form.serviceToken, onChange: (e) => setForm((p) => ({ ...p, serviceToken: e.target.value, rawCookies: undefined })) }),
+              h('input', { 'data-mw-input': '', placeholder: 'userId（纯数字）', value: form.userId, onChange: (e) => setForm((p) => ({ ...p, userId: e.target.value, rawCookies: undefined })) }),
+              h('input', { 'data-mw-input': '', placeholder: 'xiaomichatbot_ph', value: form.xiaomichatbotPh, onChange: (e) => setForm((p) => ({ ...p, xiaomichatbotPh: e.target.value, rawCookies: undefined })) }),
               h(
                 'div',
                 { 'data-mw-row': '' },
@@ -574,33 +605,43 @@ window.__ModuleLoader__.load({
                   { 'data-mw-btn': '', 'data-primary': '', type: 'button', disabled: busy || !form.serviceToken || !form.userId || !form.xiaomichatbotPh, onClick: doToken },
                   '保存并校验',
                 ),
-                h(
-                  'button',
-                  {
-                    'data-mw-btn': '',
-                    type: 'button',
-                    disabled: busy,
-                    title: '把整段 cookie 串（k=v; k2=v2）粘到剪贴板后点这里，自动拆成三个值',
-                    onClick: async () => {
-                      try {
-                        const text = await navigator.clipboard.readText()
-                        const parsed = parseCookieString(text)
-                        if (!parsed.serviceToken && !parsed.userId && !parsed.xiaomichatbotPh) {
-                          return { text: '剪贴板里没找到这三个 cookie，请确认复制的是 k=v; k2=v2 这种格式。', tone: 'warn' }
-                        }
-                        setForm((p) => ({
-                          serviceToken: parsed.serviceToken || p.serviceToken,
-                          userId: parsed.userId || p.userId,
-                          xiaomichatbotPh: parsed.xiaomichatbotPh || p.xiaomichatbotPh,
-                        }))
-                        return { text: '已从剪贴板填入，确认无误后点「保存并校验」。', tone: 'good' }
-                      } catch (error) {
-                        return { text: `读剪贴板失败（浏览器可能不给权限）：${String(error?.message ?? error).slice(0, 80)}`, tone: 'warn' }
-                      }
-                    },
+                // 🔴 不要用 `navigator.clipboard.readText()`：
+                //    它只在 **HTTPS 或 localhost** 下可用。远程访问（http://IP:端口）
+                //    时它是 `undefined`，按钮点了直接报错 —— 真机就撞在这里。
+                //
+                // 改用"粘到框里自动解析"：把整段 cookie 串粘进下面这个文本框，
+                // 边输入边拆，纯前端逻辑，任何环境都能用。
+                h('textarea', {
+                  'data-mw-input': '',
+                  rows: 3,
+                  placeholder: '把整段 cookie 粘到这里，会自动拆成下面三个值。\n例如：xiaomichatbot_serviceToken=xxx; userId=123; xiaomichatbot_ph=yyy',
+                  value: form.rawCookies ?? '',
+                  style: { width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 12 },
+                  onChange: (e) => {
+                    const raw = e.target.value
+                    const parsed = parseCookieString(raw)
+                    setForm((p) => ({
+                      ...p,
+                      rawCookies: raw,
+                      serviceToken: parsed.serviceToken || '',
+                      userId: parsed.userId || '',
+                      xiaomichatbotPh: parsed.xiaomichatbotPh || '',
+                    }))
                   },
-                  '从剪贴板自动填充',
-                ),
+                }),
+                form.rawCookies
+                  ? h(
+                      'div',
+                      { 'data-mw-note': '' },
+                      (() => {
+                        const parsed = parseCookieString(form.rawCookies)
+                        const got = [parsed.serviceToken && 'serviceToken', parsed.userId && 'userId', parsed.xiaomichatbotPh && 'ph'].filter(Boolean)
+                        return got.length === 3
+                          ? `✓ 已识别全部三个（${got.join(' / ')}）`
+                          : `⚠️ 只识别到：${got.length ? got.join(' / ') : '无'} —— 检查是否漏了某个 cookie`
+                      })(),
+                    )
+                  : null,
               ),
             )
           : null,
