@@ -1,6 +1,6 @@
 {
   "name": "dsh-mimo-web-login",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Unofficial DSH plugin: use Xiaomi MiMo AI Studio web models as a DSH LLM provider (browser login capture + SSE streaming + prompting-based tool calls), provider route mimo-web",
   "type": "module",
   "private": false,

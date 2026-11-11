@@ -1210,13 +1210,25 @@ await testAsync('Linux：浏览器查找覆盖 PATH，并识别有无图形环�
     assert.equal(caps.hasDisplay, false, 'DISPLAY 为空时 hasDisplay 应为 false')
     assert.equal(caps.defaultBrowser, !caps.systemBrowser, 'defaultBrowser 应与"是否找到系统浏览器"互补')
 
-    // ② 浏览器查找必须走 PATH：把一个假的 chromium 放进 PATH，能被找到
+    // ② 浏览器查找必须走 PATH（而不是只靠固定路径表）。
+    //
+    // 做法：把 PATH **只设成临时目录**，放一个假 `chromium`。
+    //   · 如果实现只查固定路径 ⇒ 返回 ''（CI 上 /usr/bin/chromium 可能真存在，
+    //     所以还要配合"临时目录优先"这一点）
+    //   · 如果实现查 PATH ⇒ 找到临时目录里那个假的
+    //
+    // ⚠️ 名字用 `chromium`（不是 google-chrome）：避免撞上 CI runner 预装的
+    // /usr/bin/google-chrome —— 那个优先级更高，会先命中，测不到 PATH 逻辑。
     const tmpDir = join(tmpdir(), `mimo-ci-${process.pid}`)
     mkdirSync(tmpDir, { recursive: true })
     const fake = join(tmpDir, 'chromium')
     writeFileSync(fake, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    process.env.PATH = `${tmpDir}${realPath ? `${delimiter}${realPath}` : ''}`
-    assert.equal(mod.findSystemBrowser(), fake, '应能从 PATH 里找到 chromium（说明不是只靠固定路径表）')
+    process.env.PATH = tmpDir
+    assert.equal(
+      mod.findSystemBrowser(),
+      fake,
+      '只给 PATH=临时目录时应能从中找到 chromium（说明查找确实读了 PATH）',
+    )
     rmSync(tmpDir, { recursive: true, force: true })
   } finally {
     Object.defineProperty(process, 'platform', { value: real, configurable: true })
