@@ -213,6 +213,7 @@ window.__ModuleLoader__.load({
     // ── 页签：账号 ──────────────────────────────────────────────────────
     function AccountTab({ status, models, busy, act, reload }) {
       const [showToken, setShowToken] = useState(false)
+      const [showFrame, setShowFrame] = useState(false)
       const [form, setForm] = useState({ serviceToken: '', userId: '', xiaomichatbotPh: '' })
       const loginRunning = Boolean(status.login?.running)
       const account = status.account
@@ -366,9 +367,83 @@ window.__ModuleLoader__.load({
               '用默认浏览器打开登录页',
             ),
             h('button', { 'data-mw-btn': '', type: 'button', disabled: busy || loginRunning, onClick: doVerify }, '校验登录态'),
-            h('button', { 'data-mw-btn': '', type: 'button', disabled: busy || loggedIn === false, onClick: () => setShowToken((v) => !v) }, '手动粘贴 Cookie'),
+            // ⚠️ **绝不能**因为"没登录"就禁用这一条 —— 手动粘贴恰恰是没登录时才需要的。
+            // 早先写成 `disabled: busy || loggedIn === false`，结果未登录状态下按钮永远
+            // 是灰的，用户点不动、也就永远登不上（真机报「手动粘贴点不了」）。
+            h('button', { 'data-mw-btn': '', type: 'button', disabled: busy, onClick: () => setShowToken((v) => !v) }, '手动粘贴 Cookie'),
+            // 内置浏览器：把登录页直接嵌在面板里，**在你当前这个浏览器**里渲染。
+            // 远程场景（Linux 服务器无桌面）时，这是唯一"看得见"的登录方式 ——
+            // 不依赖服务器上的任何浏览器。
+            h(
+              'button',
+              {
+                'data-mw-btn': '',
+                'data-primary': showFrame ? '' : undefined,
+                type: 'button',
+                disabled: busy,
+                title: '在本面板里直接打开 MiMo 登录页（不依赖服务器上的浏览器）',
+                onClick: () => setShowFrame((v) => !v),
+              },
+              showFrame ? '关闭内置浏览器' : '内置浏览器登录',
+            ),
             loggedIn ? h('button', { 'data-mw-btn': '', 'data-danger': '', type: 'button', disabled: busy, onClick: doLogout }, '退出当前账号') : null,
           ),
+
+          // ── 内置浏览器（iframe）──────────────────────────────────────
+          //
+          // 为什么用 iframe 而不是让服务器开浏览器：
+          //   Linux 服务器常常没有桌面（`DISPLAY` 为空），`xdg-open` 必然失败。
+          //   但**你的浏览器**就在手上 —— 把登录页嵌进面板，你在里面正常登录即可，
+          //   服务器完全不参与渲染。
+          //
+          // 实测 aistudio.xiaomimimo.com **没有** `X-Frame-Options` 也没有 CSP
+          // `frame-ancestors`，所以可以直接嵌。
+          //
+          // ⚠️ 跨域 iframe 里**读不到** cookie（同源策略）。所以流程是：
+          //   ① 在这里登录 → ② 用旁边的「存储」面板或 Console 把三个值取出来 → ③ 粘到下面。
+          //   想跳过这一步就得靠 DSH 的 guest 浏览器（另一条路）。
+          showFrame
+            ? h(
+                'div',
+                { 'data-mw-card': '' },
+                h('div', { 'data-mw-card-title': '' }, '内置浏览器'),
+                h(
+                  'div',
+                  { 'data-mw-note': '' },
+                  '在下面这个窗口里登录小米账号。登录完成后，按 F12 → 「存储」→「Cookie」→ 选 aistudio.xiaomimimo.com，' +
+                    '复制 xiaomichatbot_serviceToken / userId / xiaomichatbot_ph 三个值，粘到底下的输入框。' +
+                    '（跨域限制导致面板读不到 iframe 里的 cookie，这一步只能手动。）',
+                ),
+                h('iframe', {
+                  src: 'https://aistudio.xiaomimimo.com/#/c',
+                  title: 'MiMo 登录页',
+                  style: {
+                    width: '100%',
+                    height: 520,
+                    border: '1px solid rgba(127,127,127,.3)',
+                    borderRadius: 8,
+                    background: '#111',
+                  },
+                  // iframe 内允许脚本、表单、同源（登录要用）
+                  sandbox: 'allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox',
+                }),
+                h(
+                  'div',
+                  { 'data-mw-row': '', style: { marginTop: 8 } },
+                  h(
+                    'a',
+                    {
+                      'data-mw-btn': '',
+                      href: 'https://aistudio.xiaomimimo.com/#/c',
+                      target: '_blank',
+                      rel: 'noreferrer noopener',
+                      style: { textDecoration: 'none', display: 'inline-block' },
+                    },
+                    '在新标签页打开（iframe 加载不出来时用这个）',
+                  ),
+                ),
+              )
+            : null,
 
           h(
             'div',
@@ -436,16 +511,36 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { 'data-mw-note': '' },
-                '② 在那个页面登录 → 按 F12 → Application → Cookies → https://aistudio.xiaomimimo.com，' +
-                  '复制这三个值（第一个名字带 xiaomichatbot_ 前缀）：',
+                '② 在那个页面登录，然后按 F12 找 cookie —— 各浏览器的入口名字不一样：',
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '', style: { marginLeft: 12 } },
+                '· Chrome / Edge：「应用程式」(Application) → Cookie',
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '', style: { marginLeft: 12 } },
+                '· Firefox：「存储」(Storage) → Cookie（**不是**「应用程序」）',
+              ),
+              h(
+                'div',
+                { 'data-mw-note': '', style: { marginLeft: 12 } },
+                '然后在里面选 https://aistudio.xiaomimimo.com，复制这三个（第一个带 xiaomichatbot_ 前缀）：',
               ),
               h('div', { 'data-mw-note': '', 'data-mw-mono': '' }, 'xiaomichatbot_serviceToken / userId / xiaomichatbot_ph'),
-              // 一条命令把三个值打出来 —— 比让人在 DevTools 里一个个翻快得多，
-              // 而且不会抄错名字（`serviceToken` 少了前缀就是 401 的经典原因）。
               h(
                 'div',
                 { 'data-mw-note': '' },
-                '③ 也可以在登录页的 Console 里粘这一行，它会把三个值直接打印出来：',
+                '⚠️ `xiaomichatbot_serviceToken` 通常是 **HttpOnly** —— 用 Console 的 `document.cookie` 看不到它，' +
+                  '必须走上面的「存储/应用程式」面板。',
+              ),
+              // 如果 serviceToken 不是 HttpOnly，这行 Console 能一次把值打全，省得手抄。
+              // 但 HttpOnly 的情况下它看不到 —— 上面的提示已经说明必须走存储面板。
+              h(
+                'div',
+                { 'data-mw-note': '' },
+                '③（可选）如果上面那行在 Console 里看不到 serviceToken，就忽略这一步，直接从存储面板复制。否则可以粘这行一次性打印出来：',
               ),
               h('pre', {
                 'data-mw-code': '',

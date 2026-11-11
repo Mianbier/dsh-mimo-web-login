@@ -227,6 +227,33 @@ for (const [label, , renderFn, expected] of cases) {
   log(`✓ ${label} 页签渲染正常（${tree.length} 字符）`)
 }
 
+/**
+ * 🔴 真机 bug 回归：**未登录时「手动粘贴 Cookie」按钮必须是可点的**。
+ *
+ * 早先那个按钮写的是 `disabled: busy || loggedIn === false` —— 逻辑写反了：
+ * 手动粘贴恰恰是**没登录时**才需要的入口。结果是全新安装的用户看到按钮是灰的，
+ * 点不动、也就永远登不上。用户原话：「你的手动粘贴点不了」。
+ */
+{
+  const unloggedStatus = { ...statusPayload, loggedIn: false, account: null, accounts: [] }
+  hookArr = []; hookIdx = 0; effects = []
+  const tree = renderComponent(
+    () => render(createElement(globalThis.__mwbiz__.AccountTab, { status: unloggedStatus, models: [], busy: false, act: mockApi.act, reload: mockApi.reload })),
+    'AccountTab',
+  )
+  assert.ok(tree.includes('手动粘贴 Cookie'), '未登录时也应显示「手动粘贴 Cookie」按钮')
+
+  // 找到那个按钮的 HTML 片段，确认它没有 disabled 属性
+  const idx = tree.indexOf('手动粘贴 Cookie')
+  const around = tree.slice(Math.max(0, idx - 400), idx)
+  const tagStart = around.lastIndexOf('<button')
+  const btnHtml = tagStart >= 0 ? around.slice(tagStart) + tree.slice(idx, idx + 40) : ''
+  assert.ok(!/<button[^>]*\sdisabled/.test(btnHtml), `未登录时「手动粘贴 Cookie」不该被禁用，实际：${btnHtml.slice(0, 200)}`)
+
+  assert.ok(tree.includes('内置浏览器登录'), '应提供「内置浏览器登录」入口（远程/无桌面场景）')
+  log('✓ 未登录时「手动粘贴 Cookie」可点 + 有内置浏览器入口')
+}
+
 for (const dispose of disposers) { try { dispose() } catch {} }
 
 log('')

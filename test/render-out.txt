@@ -1,10 +1,11 @@
 ✓ 模块已注册：id=dsh-mimo-web-login
 ✓ apply() 注册了 3 个槽位：settings.section / conversation.view / shell.overlay
 ✓ 网页版页签 + 内置浏览器宿主均已注册
-✓ 完整 Panel 渲染正常（623 字符，含 5 页签骨架 + 账号页诊断行）
+✓ 完整 Panel 渲染正常（630 字符，含 5 页签骨架 + 账号页诊断行）
 ✓ ModelTab 页签渲染正常（228 字符）
 ✓ UsageTab 页签渲染正常（313 字符）
 ✓ SettingsTab 页签渲染正常（309 字符）
 ✓ AboutTab 页签渲染正常（495 字符）
+✓ 未登录时「手动粘贴 Cookie」可点 + 有内置浏览器入口
 
 渲染冒烟测试通过 ✓
