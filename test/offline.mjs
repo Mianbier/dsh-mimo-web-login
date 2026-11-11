@@ -1178,6 +1178,46 @@ await testAsync('上游返回什么就转什么，不擅自改写 finish 语义'
   assert.equal(upstreamError.finish?.kind, 'error', '上游报错必须照实转成 error')
 })
 
+/**
+ * Linux 支持：浏览器查找不能只列 `/usr/bin`，而且要识别"没有图形环境"。
+ *
+ * Linux 上浏览器装在哪完全取决于发行版与安装方式（apt / snap / flatpak / nix…），
+ * 固定路径表永远列不全 ⇒ 必须先查 `PATH`。而纯 SSH 服务器上 `DISPLAY` 为空，
+ * 登录窗口根本开不出来 ⇒ 面板该直接引导用户走「手动粘贴 Cookie」。
+ */
+await testAsync('Linux：浏览器查找覆盖 PATH，并识别有无图形环境', async () => {
+  const real = process.platform
+  const realDisplay = process.env.DISPLAY
+  const realWayland = process.env.WAYLAND_DISPLAY
+  try {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    process.env.DISPLAY = ''
+    delete process.env.WAYLAND_DISPLAY
+    // 带 query 强制重新求值（模块内没有顶层缓存，这里只是保险）
+    const mod = await import('../lib/browser-login.js')
+
+    const caps = mod.loginCapabilities()
+    assert.equal(caps.platform, 'linux', 'platform 应为 linux')
+    assert.equal(caps.hasDisplay, false, 'DISPLAY 为空时 hasDisplay 应为 false')
+    // 没找到 Chromium 系浏览器 ⇒ 面板该显示"用默认浏览器打开"这条兜底
+    assert.equal(caps.defaultBrowser, !caps.systemBrowser, 'defaultBrowser 应与"是否找到系统浏览器"互补')
+    // 找不到浏览器时，错误文案要给出 Linux 可执行的建议（不是 Windows 的 Edge）
+    let message = ''
+    try {
+      await mod.captureLogin({ timeoutMs: 200 })
+    } catch (error) {
+      message = String(error?.message ?? '')
+    }
+    assert.ok(/Chromium|chromium|Chrome|chrome/.test(message), `错误文案应提到 Linux 常见浏览器名，实际：${message}`)
+  } finally {
+    Object.defineProperty(process, 'platform', { value: real, configurable: true })
+    if (realDisplay === undefined) delete process.env.DISPLAY
+    else process.env.DISPLAY = realDisplay
+    if (realWayland === undefined) delete process.env.WAYLAND_DISPLAY
+    else process.env.WAYLAND_DISPLAY = realWayland
+  }
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)

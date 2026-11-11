@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { createAdapter, PROVIDER, isUsableModelId } from './lib/adapter.js'
-import { captureLogin, clearBrowserProfile, electronWindowAvailable, loginCapabilities } from './lib/browser-login.js'
+import { REQUIRED_COOKIES, captureLogin, clearBrowserProfile, electronWindowAvailable, loginCapabilities, openInDefaultBrowser } from './lib/browser-login.js'
 import { MimoClient, MimoError } from './lib/mimo-client.js'
 import { noteCall, resetUsage, summarize } from './lib/usage.js'
 import {
@@ -279,6 +279,20 @@ export function apply(ctx, config = {}) {
               dataDir: storeDir(),
               tokenTtlMs: TOKEN_TTL_MS,
               version: VERSION,
+            })
+            return
+          }
+
+          // 「用系统默认浏览器打开登录页」—— 没有 Chromium 系浏览器时的兜底。
+          //
+          // 这条**不读 cookie**：只是把登录页丢给用户的默认浏览器（Linux 上可能是
+          // Firefox/Epiphany，路径没法穷举）。用户登完自己从 DevTools 复制三个
+          // cookie 粘回面板 —— 面板本来就有这个入口。
+          if (req.method === 'POST' && route === '/login/open-browser') {
+            const result = await openInDefaultBrowser()
+            sendJson(res, result.ok ? 200 : 500, {
+              ...result,
+              cookies: REQUIRED_COOKIES,
             })
             return
           }

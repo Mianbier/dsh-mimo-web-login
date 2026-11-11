@@ -280,6 +280,24 @@ window.__ModuleLoader__.load({
             loginRunning
               ? h('button', { 'data-mw-btn': '', type: 'button', disabled: busy, onClick: doCancel }, '取消登录')
               : null,
+            // 没有 Chromium 系浏览器（或打不开窗口）时的兜底：用系统默认浏览器打开登录页。
+            // 这条路不读 cookie —— 用户登完自己粘三个值，任何浏览器都行。
+            h(
+              'button',
+              {
+                'data-mw-btn': '',
+                type: 'button',
+                disabled: busy,
+                title: '用系统默认浏览器打开登录页（不自动读取 Cookie，登完手动粘贴）',
+                onClick: () =>
+                  act('openBrowser', async () => {
+                    const data = await jpost('/login/open-browser')
+                    await reload()
+                    return { text: data?.message ?? '已尝试打开浏览器', tone: data?.ok ? 'good' : 'warn' }
+                  }),
+              },
+              '用默认浏览器打开登录页',
+            ),
             h('button', { 'data-mw-btn': '', type: 'button', disabled: busy || loginRunning, onClick: doVerify }, '校验登录态'),
             h('button', { 'data-mw-btn': '', type: 'button', disabled: busy || loggedIn === false, onClick: () => setShowToken((v) => !v) }, '手动粘贴 Cookie'),
             loggedIn ? h('button', { 'data-mw-btn': '', 'data-danger': '', type: 'button', disabled: busy, onClick: doLogout }, '退出当前账号') : null,
@@ -292,8 +310,11 @@ window.__ModuleLoader__.load({
               ? `登录窗口使用：${status.capabilities.systemBrowser}`
               : status.capabilities?.electronWindow
                 ? '登录窗口使用：Electron 内置浏览器'
-                : '⚠️ 这台机器上没找到 Edge / Chrome，只能用「手动粘贴 Cookie」。',
+                : '⚠️ 这台机器上没找到 Chrome / Chromium / Edge，请用「用默认浏览器打开登录页」+「手动粘贴 Cookie」。',
           ),
+          status.capabilities?.hasDisplay === false
+            ? h('div', { 'data-mw-note': '' }, '⚠️ 当前没有图形环境（DISPLAY 未设置），登录窗口开不出来 —— 请在带桌面的机器上登录后把 Cookie 粘过来。')
+            : null,
           h('div', { 'data-mw-note': '' }, '宿主进程：node（无窗口 API）→ 拉起真实浏览器；凭据只在登录那一刻读一次。'),
         ),
 
