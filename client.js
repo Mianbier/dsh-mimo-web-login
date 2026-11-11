@@ -640,7 +640,6 @@ window.__ModuleLoader__.load({
           'div',
           { 'data-mw-card': '' },
           h('div', { 'data-mw-card-title': '' }, '上下文与节流'),
-          num('maxPromptChars', 'prompt 字符上限', 20000, 1200000, 10000, '每轮重发全量历史，这个值也是风控阀门'),
           num('contextWindow', '上下文窗口', 32768, 4194304, 1024, '声明给 DSH 的窗口（上游模型多标 1M）'),
           num('minIntervalMs', '请求最小间隔', 0, 30000, 100, '毫秒；固定间隔比随机间隔更像脚本'),
           num('idleTimeoutMs', '流空闲超时', 30000, 600000, 5000, '毫秒'),
@@ -654,21 +653,9 @@ window.__ModuleLoader__.load({
               disabled: busy,
               onChange: (e) => save({ allowConcurrent: e.target.checked }),
             }),
-            h('span', { 'data-mw-note': '' }, '网页端通常只允许一条生成，开了容易被拒'),
+            h('span', { 'data-mw-note': '' }, '实测上游接受同账号并发；关掉后两个窗口不能同时发消息'),
           ),
           num('probeIntervalMs', '探活间隔', 0, 86400000, 60000, '毫秒；0 = 关闭（只读、零额度）'),
-          h(
-            'div',
-            { 'data-mw-row': '' },
-            h('span', { 'data-mw-k': '' }, '官网留记录'),
-            h('input', {
-              type: 'checkbox',
-              checked: settings.saveConversationHistory !== false,
-              disabled: busy,
-              onChange: (e) => save({ saveConversationHistory: e.target.checked }),
-            }),
-            h('span', { 'data-mw-note': '' }, '关掉后官网左侧历史栏看不到插件发过的对话'),
-          ),
         ),
         // ── 语音：给 Aurabot 的本地接口脚本读 ──────────────────────────
         //

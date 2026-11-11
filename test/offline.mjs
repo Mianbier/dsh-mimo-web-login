@@ -802,8 +802,9 @@ await testAsync('显示名会被映射成上游真实模型 id', async () => {
  * 用户要的「文本超限就压缩」：不能简单砍中间（那会让模型突然失忆），
  * 要保住 ① 系统头 ② 最近几轮 ③ 首轮任务，只收掉中间已完成的回合。
  */
-await testAsync('超长 prompt 会被压缩而不是砍掉最近对话', async () => {
+await testAsync('超长 prompt 原样发出，适配器不做压缩/截断', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
+  let capturedQuery
   const adapter = createAdapter({
     getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
     getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 20_000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
@@ -813,17 +814,12 @@ await testAsync('超长 prompt 会被压缩而不是砍掉最近对话', async (
       if (href.includes('/bot/config')) {
         return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
-      // 会话记录保存是额外的一枪（为了让官网可见），这里不该抢走 chat 的抓取
-      if (href.includes('/conversation/save')) {
-        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
-      }
       capturedQuery = JSON.parse(init.body).query
       return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"ok"}\n\n', 'event: finish\ndata: {}\n\n'])
     },
   })
 
-  let capturedQuery
-  // 造一段远超上限的历史：第一条带关键信息，中间一堆噪声，最后一条是当前提问
+  // 造一段远超 maxPromptChars 的历史
   const messages = [{ role: 'user', content: [{ type: 'text', text: '【关键任务】请记住代号 ALPHA-7' }] }]
   for (let i = 0; i < 60; i += 1) {
     messages.push({ role: 'user', content: [{ type: 'text', text: `噪声第 ${i} 段：${'填充'.repeat(200)}` }] })
@@ -832,68 +828,49 @@ await testAsync('超长 prompt 会被压缩而不是砍掉最近对话', async (
   messages.push({ role: 'user', content: [{ type: 'text', text: '【当前问题】刚才的任务代号是什么？' }] })
 
   const prepared = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
-  for await (const _c of prepared.stream({
-    model: 'mimo-v2.6-pro',
-    system: '你是助手。',
-    messages,
-    tools: [],
-  })) {
-    /* 消耗 */
-  }
+  for await (const _c of prepared.stream({ model: 'mimo-v2.6-pro', system: '你是助手。', messages, tools: [] })) { /* 消耗 */ }
 
   assert.ok(capturedQuery, '应该发出请求')
-  assert.ok(capturedQuery.length <= 20_000, `压缩后仍有 ${capturedQuery.length} 字符，超过上限`)
-  // 最近的提问必须还在（不能砍尾巴）
-  assert.ok(capturedQuery.includes('【当前问题】'), '最近的提问被砍掉了 —— 模型会失忆')
-  // 系统头必须还在
-  assert.ok(capturedQuery.includes('你是助手。'), '系统提示被砍掉了')
-  // 应该有压缩说明
-  assert.ok(/压缩省略/.test(capturedQuery), '应该有"已压缩省略"的说明，让模型知道自己漏了背景')
+  // 🔴 新设计：适配器**不加工**上下文。长度是宿主（DSH）的职责。
+  // 截断会让模型突然失忆，而且用户完全不知道发生了什么 —— 超长就照实报错。
+  assert.ok(capturedQuery.length > 20_000, `适配器不该压缩，实际只有 ${capturedQuery.length} 字符`)
+  assert.ok(capturedQuery.includes('【关键任务】'), '最早的任务必须原样保留')
+  assert.ok(capturedQuery.includes('【当前问题】'), '最近的提问必须原样保留')
+  assert.ok(capturedQuery.includes('你是助手。'), '系统提示必须原样保留')
+  assert.ok(!/压缩省略|中间省略/.test(capturedQuery), '不该插入任何"已省略"的说明')
 })
 
 /**
  * 用户报的真实问题：「为什么我在 mimo 官网看不到聊天记录」。
  *
- * 实测结论：只发 `react/chat` 不打 `conversation/save`，消息能正常对话，
- * 但 `conversation/list`（网页端左栏数据源）里不会出现这条会话。
- * 这个测试锁住"聊天后必须补一枪 save"，并且 title 不能为空（空串会 400）。
+ * 早先的解法是聊天后额外补一枪 `conversation/save`。但那是**往用户官方账号里**
+ * 写我们自己的记录 —— 属于未经要求的外部副作用，而且那段 prompt 又长又难看。
+ *
+ * 现在改成纯 API 语义：只发对话请求，不替用户在官网上留任何痕迹。
+ * 想看历史就用官方网页自己聊；插件这边只做模型通道。
  */
-await testAsync('聊天结束后会保存会话记录（否则官网看不到历史）', async () => {
+await testAsync('不发 conversation/save，不往用户官网账号里写记录', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
-  let saveCalled = false
-  let savedBody
+  const urls = []
   const adapter = createAdapter({
     getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
-    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false, saveConversationHistory: true }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 1_000_000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
     logger: {},
-    fetchImpl: async (url, init) => {
+    fetchImpl: async (url) => {
       const href = String(url)
+      urls.push(href)
       if (href.includes('/bot/config')) {
         return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
-      if (href.includes('/conversation/save')) {
-        saveCalled = true
-        savedBody = JSON.parse(init.body)
-        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
-      }
-      return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"我是 MiMo"}\n\n', 'event: finish\ndata: {}\n\n'])
+      return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"ok"}\n\n', 'event: finish\ndata: {}\n\n'])
     },
   })
 
   const prepared = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
-  for await (const _c of prepared.stream({
-    model: 'mimo-v2.6-pro',
-    system: '',
-    messages: [{ role: 'user', content: [{ type: 'text', text: '你叫什么名字？' }] }],
-    tools: [],
-  })) {
-    /* 消耗 */
-  }
+  for await (const _c of prepared.stream({ model: 'mimo-v2.6-pro', system: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [] })) { /* 消耗 */ }
 
-  assert.equal(saveCalled, true, '聊天结束后必须调用 conversation/save，否则官网看不到记录')
-  assert.ok(savedBody?.conversationId, 'save 必须带 conversationId')
-  assert.ok(typeof savedBody?.title === 'string' && savedBody.title.length > 0, 'title 不能为空（空串会 400）')
-  assert.equal(savedBody.type, 'chat')
+  assert.ok(urls.some((u) => /react\/chat|bot\/chat/.test(u)), '应该发出对话请求')
+  assert.ok(!urls.some((u) => u.includes('/conversation/save')), `不该调用 conversation/save，实际请求：${urls.join(', ')}`)
 })
 
 /**
@@ -1156,26 +1133,23 @@ await testAsync('chained 模式只发增量、剔回声、不重发未变的头�
 })
 
 /**
- * 真机事故（用户截图 2026-11-06）：连续三轮显示「已完成，用时 10 秒」，
- * 但界面上**一个字都没有**。会话记录里是 `content: []` + `reason: completed`
- * —— 空产出被当成正常结束，用户以为文件生成好了，实际什么都没有。
+ * 上游回什么就转什么 —— 适配器不替宿主判断"空回复算不算失败"。
  *
- * 之前判据是 `!textBlock?.text`：模型只吐空白（`"\n"` / `"   "`）时 textBlock 存在，
- * 判据为假 ⇒ 走正常完成路径 ⇒ 界面上就是空白。
- * 现在改成 **trim 之后**判空，并且空文本块不再发 `block-end`。
+ * 早先这里有一层 `EMPTY_RESPONSE` 判定（还把空白 trim 之后当空）。那是我自作主张：
+ * 空回复要不要报错、要不要重试，是 **DSH 宿主**的职责（它有自己的策略与 UI）；
+ * 适配器多判一层，只会让宿主的重试逻辑失效、错误文案重复。
  */
-await testAsync('空/空白响应必须报错，不能静默「已完成」', async () => {
+await testAsync('上游返回什么就转什么，不擅自改写 finish 语义', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
 
   const runCase = async (sseLines) => {
     const adapter = createAdapter({
       getAuth: () => ({ serviceToken: 't', userId: '1', xiaomichatbotPh: 'p' }),
-      getSettings: () => ({ thinking: true, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 5000, allowConcurrent: true, saveConversationHistory: false }),
+      getSettings: () => ({ thinking: true, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 5000, allowConcurrent: true }),
       logger: { warn: () => {}, debug: () => {} },
       fetchImpl: async (url) => {
         const href = String(url)
         if (href.includes('/bot/config')) return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
-        if (href.includes('/conversation/save')) return new Response(JSON.stringify({ code: 0, data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
         return sseResponse(sseLines)
       },
     })
@@ -1189,24 +1163,19 @@ await testAsync('空/空白响应必须报错，不能静默「已完成」', as
     return { finish, textBlocks }
   }
 
-  for (const [label, lines] of [
-    ['只有换行', ['event: message\ndata: {"messageType":"assistant","content":"\\n"}\n\n', 'event: finish\ndata: {}\n\n']],
-    ['只有空格', ['event: message\ndata: {"messageType":"assistant","content":"   "}\n\n', 'event: finish\ndata: {}\n\n']],
-    ['完全空流', ['event: dialog\ndata: {"id":"x"}\n\n', 'event: finish\ndata: {}\n\n']],
-  ]) {
-    const { finish, textBlocks } = await runCase(lines)
-    assert.equal(finish?.kind, 'error', `${label}：应报错，实际 ${JSON.stringify(finish)}`)
-    assert.equal(finish.failure.code, 'EMPTY_RESPONSE', `${label}：错误码应为 EMPTY_RESPONSE`)
-    assert.equal(textBlocks.length, 0, `${label}：不该产出空的文本块`)
-  }
-
-  // 反例：正常应答与工具调用不能被误伤
+  // 正常应答：照实转成 stop，文本块正常
   const normal = await runCase(['event: message\ndata: {"messageType":"assistant","content":"你好呀"}\n\n', 'event: finish\ndata: {}\n\n'])
   assert.equal(normal.finish?.kind, 'stop', '正常应答应 stop')
   assert.equal(normal.textBlocks.length, 1, '正常应答应有一个文本块')
+  assert.equal(normal.textBlocks[0].text, '你好呀', '正文应原样透传')
 
+  // 工具调用：照实转成 tool-calls
   const tool = await runCase(['event: message\ndata: {"messageType":"assistant","content":"```dsh-tool\\n{\\"tool_calls\\":[{\\"name\\":\\"pwsh\\",\\"arguments\\":{\\"command\\":\\"ls\\"}}]}\\n```"}\n\n', 'event: finish\ndata: {}\n\n'])
   assert.equal(tool.finish?.kind, 'tool-calls', `工具调用应 tool-calls，实际 ${JSON.stringify(tool.finish)}`)
+
+  // 上游明确报错：照实转成 error（这条必须保留 —— 那是上游的语义，不是我们加的）
+  const upstreamError = await runCase(['event: error\ndata: {"content":"没有权限操作"}\n\n'])
+  assert.equal(upstreamError.finish?.kind, 'error', '上游报错必须照实转成 error')
 })
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
