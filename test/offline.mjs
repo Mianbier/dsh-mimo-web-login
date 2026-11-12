@@ -846,34 +846,51 @@ await testAsync('超长 prompt 原样发出，适配器不做压缩/截断', asy
 /**
  * 用户报的真实问题：「为什么我在 mimo 官网看不到聊天记录」。
  *
- * 早先的解法是聊天后额外补一枪 `conversation/save`。但那是**往用户官方账号里**
- * 写我们自己的记录 —— 属于未经要求的外部副作用，而且那段 prompt 又长又难看。
+ * 结论：只发 `react/chat` 时消息能正常对话，但 `chat/conversation/list`
+ * （网页端左栏的数据源）里**不会出现**这条会话 —— 用户在官网完全看不到，
+ * 于是会以为插件没工作。
  *
- * 现在改成纯 API 语义：只发对话请求，不替用户在官网上留任何痕迹。
- * 想看历史就用官方网页自己聊；插件这边只做模型通道。
+ * 所以要**在发 chat 之前**打一枪 `conversation/save` 登记这条会话。
+ * 同一个 id 重复打是幂等的（只更新 title 与 updateTime），于是官网里的
+ * 那条会话会跟着刷新 —— 看起来就是"实时同步"。
  */
-await testAsync('不发 conversation/save，不往用户官网账号里写记录', async () => {
+await testAsync('发消息前会登记会话，让官网左栏能实时看到', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
   const urls = []
+  let saveBody
   const adapter = createAdapter({
     getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
-    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 1_000_000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
     logger: {},
-    fetchImpl: async (url) => {
+    fetchImpl: async (url, init) => {
       const href = String(url)
       urls.push(href)
       if (href.includes('/bot/config')) {
         return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (href.includes('/conversation/save')) {
+        saveBody = JSON.parse(init.body)
+        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
       return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"ok"}\n\n', 'event: finish\ndata: {}\n\n'])
     },
   })
 
   const prepared = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
-  for await (const _c of prepared.stream({ model: 'mimo-v2.6-pro', system: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [] })) { /* 消耗 */ }
+  for await (const _c of prepared.stream({ model: 'mimo-v2.6-pro', system: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'text', text: '帮我看下这个报错' }] }], tools: [] })) { /* 消耗 */ }
 
   assert.ok(urls.some((u) => /react\/chat|bot\/chat/.test(u)), '应该发出对话请求')
-  assert.ok(!urls.some((u) => u.includes('/conversation/save')), `不该调用 conversation/save，实际请求：${urls.join(', ')}`)
+  assert.ok(urls.some((u) => u.includes('/conversation/save')), `应在发消息前登记会话，实际请求：${urls.join(', ')}`)
+
+  // 登记必须在 chat 之前 —— 否则用户刷新官网时可能先看到空列表
+  const saveIdx = urls.findIndex((u) => u.includes('/conversation/save'))
+  const chatIdx = urls.findIndex((u) => /react\/chat|bot\/chat/.test(u))
+  assert.ok(saveIdx >= 0 && saveIdx < chatIdx, `conversation/save 必须在 chat 之前（实际 save@${saveIdx} chat@${chatIdx}）`)
+
+  assert.ok(saveBody?.conversationId, 'save 必须带 conversationId')
+  assert.equal(saveBody.type, 'chat')
+  assert.ok(typeof saveBody.title === 'string' && saveBody.title.length > 0, 'title 不能为空（空串会 400）')
+  assert.ok(saveBody.title.includes('报错'), `标题应取自用户的话，实际：${saveBody.title}`)
 })
 
 /**
@@ -1017,12 +1034,21 @@ await testAsync('v2 的 <think> 标签会被剥离到思考区', async () => {
  * 机制：finish chunk 带 `replayState.conversationId`，宿主会把它挂到 assistant
  * 消息的 `source.replayState` 上带回来；下一轮据此复用会话、只发增量。
  */
-await testAsync('默认每条请求用全新会话（无状态全量，照搬 DeepSeek 的 new-session）', async () => {
+/**
+ * 两种模式都要在，用户可切（`settings.contextMode`）。
+ *
+ *   `chained`（默认）：同会话复用 conversationId + 只发增量 ⇒ 像官网一样快
+ *   `full`：每条请求新会话 + 发全量 ⇒ 稳妥但慢
+ *
+ * 🔴 两条路必须各自成对：复用会话 + 又发全量 = 服务端存一份、我们再发一份
+ *    ⇒ 模型看到两份历史 ⇒ 吐交叠的损坏 JSON（真机事故）。
+ */
+await testAsync('full 模式：每条请求换新会话 + 发全量', async () => {
   const { createAdapter } = await import('../lib/adapter.js')
   const calls = []
   const adapter = createAdapter({
     getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
-    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, maxPromptChars: 240000, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false, saveConversationHistory: false }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, contextMode: 'full', minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
     logger: {},
     fetchImpl: async (url, init) => {
       const href = String(url)
@@ -1037,7 +1063,6 @@ await testAsync('默认每条请求用全新会话（无状态全量，照搬 De
     },
   })
 
-  // 第一轮
   const p1 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
   let replay1
   for await (const chunk of p1.stream({
@@ -1049,40 +1074,79 @@ await testAsync('默认每条请求用全新会话（无状态全量，照搬 De
     if (chunk.type === 'finish') replay1 = chunk.replayState
   }
   assert.ok(replay1?.conversationId, '第一轮 finish 必须带 replayState.conversationId')
-  assert.equal(replay1.lastMessageId, 'm1')
-  assert.ok(replay1.headHash, 'replayState 应带 headHash（判断头部是否变化）')
   const firstConvId = calls[0].conversationId
 
-  // 第二轮：把 replayState 挂到上一条 assistant 消息的 source 上带回来
   const messages2 = [
     { id: 'm1', role: 'user', content: [{ type: 'text', text: '第一句话：我叫大明' }] },
-    {
-      id: 'a1',
-      role: 'assistant',
-      source: { kind: 'model', provider: 'mimo-web', model: 'mimo-v2.6-pro', replayState: replay1 },
-      content: [{ type: 'text', text: '收到' }],
-    },
+    { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'mimo-web', model: 'mimo-v2.6-pro', replayState: replay1 }, content: [{ type: 'text', text: '收到' }] },
     { id: 'm2', role: 'user', content: [{ type: 'text', text: '第二句话：我叫什么名字？' }] },
   ]
   const p2 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
-  let replay2
-  for await (const chunk of p2.stream({
-    model: 'mimo-v2.6-pro',
-    system: '你是一个助手。',
-    messages: messages2,
-    tools: [],
-  })) {
-    if (chunk.type === 'finish') replay2 = chunk.replayState
-  }
+  for await (const chunk of p2.stream({ model: 'mimo-v2.6-pro', system: '你是一个助手。', messages: messages2, tools: [] })) { /* drain */ }
 
   const second = calls[calls.length - 1]
-  // 默认**不复用会话**：服务端里没有历史，就不会和我们发的全量转写叠成两份
-  //（叠两份时模型会吐出交叠的损坏 JSON —— 真机事故）。
-  assert.notEqual(second.conversationId, firstConvId, '默认每条请求应换新会话（无状态）')
+  assert.notEqual(second.conversationId, firstConvId, 'full 模式：每条请求应换新会话')
   assert.ok(second.query.includes('你是一个助手。'), 'full 模式必须带系统提示')
   assert.ok(second.query.includes('我叫大明'), 'full 模式应重发完整历史')
   assert.ok(second.query.includes('我叫什么名字'), '应包含新问题')
-  assert.equal(replay2.lastMessageId, 'm2')
+})
+
+/**
+ * 默认（chained）：同会话复用 conversationId + **只发增量**。
+ * 这是"像在官网对话框里打字"的语义，也是速度的关键。
+ */
+await testAsync('默认 chained：复用会话 + 只发增量（像官网）', async () => {
+  const { createAdapter } = await import('../lib/adapter.js')
+  const calls = []
+  const saves = []
+  const adapter = createAdapter({
+    getAuth: () => ({ serviceToken: 'tok', userId: '1', xiaomichatbotPh: 'ph' }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: false }),
+    logger: {},
+    fetchImpl: async (url, init) => {
+      const href = String(url)
+      if (href.includes('/bot/config')) {
+        return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (href.includes('/conversation/save')) {
+        saves.push(JSON.parse(init.body))
+        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      calls.push(JSON.parse(init.body))
+      return sseResponse(['event: message\ndata: {"messageType":"assistant","content":"收到"}\n\n', 'event: finish\ndata: {}\n\n'])
+    },
+  })
+
+  const p1 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+  let replay1
+  for await (const chunk of p1.stream({
+    model: 'mimo-v2.6-pro',
+    system: '你是一个助手。',
+    messages: [{ id: 'm1', role: 'user', content: [{ type: 'text', text: '第一句话：我叫大明' }] }],
+    tools: [],
+  })) {
+    if (chunk.type === 'finish') replay1 = chunk.replayState
+  }
+  const firstConvId = calls[0].conversationId
+
+  const messages2 = [
+    { id: 'm1', role: 'user', content: [{ type: 'text', text: '第一句话：我叫大明' }] },
+    { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'mimo-web', model: 'mimo-v2.6-pro', replayState: replay1 }, content: [{ type: 'text', text: '收到' }] },
+    { id: 'm2', role: 'user', content: [{ type: 'text', text: '第二句话：我叫什么名字？' }] },
+  ]
+  const p2 = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+  for await (const chunk of p2.stream({ model: 'mimo-v2.6-pro', system: '你是一个助手。', messages: messages2, tools: [] })) { /* drain */ }
+
+  const second = calls[calls.length - 1]
+  assert.equal(second.conversationId, firstConvId, 'chained 模式：应复用同一个 conversationId')
+  assert.ok(!second.query.includes('我叫大明'), `chained 不该重发旧历史，实际：${second.query}`)
+  assert.ok(second.query.includes('我叫什么名字'), '应包含新问题')
+  assert.ok(second.query.length < 500, `chained 的请求应该很短，实际 ${second.query.length} 字符`)
+
+  // 官网上要能看见：每轮都打 conversation/save（幂等刷新）
+  assert.ok(saves.length >= 2, `每轮都应同步会话到官网，实际 ${saves.length} 次`)
+  assert.ok(saves.every((s) => s.conversationId === firstConvId), '同步的应是同一个会话')
+  assert.ok(saves.every((s) => typeof s.title === 'string' && s.title.length > 0), 'title 不能为空（空串会 400）')
 })
 
 /**

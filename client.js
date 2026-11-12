@@ -955,6 +955,29 @@ window.__ModuleLoader__.load({
           'div',
           { 'data-mw-card': '' },
           h('div', { 'data-mw-card-title': '' }, '上下文与节流'),
+          h(
+            'div',
+            { 'data-mw-row': '' },
+            h('span', { 'data-mw-k': '' }, '对话模式'),
+            h(
+              'select',
+              {
+                'data-mw-input': '',
+                value: settings.contextMode === 'full' ? 'full' : 'chained',
+                disabled: busy,
+                onChange: (e) => save({ contextMode: e.target.value }),
+              },
+              h('option', { value: 'chained' }, '增量（像官网，快）'),
+              h('option', { value: 'full' }, '全量（每轮重发，稳但慢）'),
+            ),
+            h(
+              'span',
+              { 'data-mw-note': '' },
+              settings.contextMode === 'full'
+                ? '每轮开新会话 + 重发完整历史：稳，但提示词大、首字慢'
+                : '同一个对话只发新内容：快，官网左栏也能实时看到（推荐）',
+            ),
+          ),
           num('contextWindow', '上下文窗口', 32768, 4194304, 1024, '声明给 DSH 的窗口（上游模型多标 1M）'),
           num('minIntervalMs', '请求最小间隔', 0, 30000, 100, '毫秒；固定间隔比随机间隔更像脚本'),
           num('idleTimeoutMs', '流空闲超时', 30000, 600000, 5000, '毫秒'),

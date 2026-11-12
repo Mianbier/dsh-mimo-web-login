@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.6.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -36,23 +36,41 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 
 ## ✨ 最近更新
 
-### v1.6.1 — README 自动化
+### v1.7.0 — 明显更快 + 官网实时可见
 
-- **README 与代码强制同步**：新增 `scripts/sync-readme.mjs`，检查版本号 / 测试数 / 默认值 / 必备章节
-- 已接进 `npm test` 和 CI —— README 落后时**构建直接失败**，不会再出现"文档还写着旧版本"
-- 升版本后跑 `npm run sync-readme` 自动改所有版本号
+**速度：首字 8.9s → 3.9s**
 
-### v1.6.0 — Firefox 友好
+| 优化 | 做了什么 |
+|---|---|
+| **正文流式输出** | 以前正文全攒完才吐（思考哗哗出、正文等着）。现在用 hold-back 窗口边收边吐 —— 实测首字 105ms 就出来了 |
+| **增量对话（默认）** | 同一个对话只发新内容。以前每轮重发几万字符（历史+协议），上游得先读完才开口 |
+| **节流不再空等** | 以前每轮固定等 1.2~1.6s；现在间隔够就完全不等待 |
 
-- **支持 Firefox 的「全部复制」**：存储面板右键复制出来是制表符分隔的多列，现在能直接解析
-- **修掉一个必然失败的按钮**：`navigator.clipboard` 在 http 远程访问下不可用，改成粘贴大文本框
-- 面板说明按 Firefox 的实际路径重写（Firefox 叫「存储」，不叫「应用程序」）
+**官网实时可见**
+
+- 每轮发消息**之前**都会登记会话（`conversation/save`），左栏那条会跟着刷新
+- 所以现在你在官网能实时看到插件发的对话，不用等这轮结束
+
+**两种模式都保留，面板可切**
+
+| 模式 | 首字 | 说明 |
+|---|---|---|
+| **`chained`（默认）** | **3.9s** | 像官网打字，只发新内容 |
+| `full` | 8.9s | 每轮重发全量，稳但慢 |
+
+> 验证过 `chained` 是安全的：第一轮说「暗号是蓝鲸42」，第二轮只发「暗号是什么？」，
+> 模型答出「蓝鲸42」—— 服务端确实按 `conversationId` 记着上下文。
+
+### v1.6.x — Firefox 友好 / README 自动化
+
+- **支持 Firefox 的「全部复制」**：存储面板右键复制出来是 TSV 多列，现在能直接解析
+- **修掉 `navigator.clipboard` 在 http 远程访问下不可用** → 改成粘贴大文本框
+- **README 与代码强制同步**：`scripts/sync-readme.mjs` 接进 `npm test` 与 CI
 
 ### v1.5.x — Linux 与远程访问
 
 - **Linux 支持**：浏览器查找先走 `PATH`（apt / snap / flatpak / nix 都能找到）
 - **root / 容器自适应**：自动加 `--no-sandbox`、`--disable-dev-shm-usage`
-- **无图形环境识别**：`DISPLAY` 为空时面板直接引导走手动路径
 - **内置浏览器登录**：面板里嵌 iframe，在你自己的浏览器里登录（服务器不需要桌面）
 - **修掉「手动粘贴 Cookie」点不动**：按钮曾在未登录时被禁用，恰恰那是它唯一该出现的场景
 
@@ -104,7 +122,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.6.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.0.tgz
 ```
 
 ### 从源码目录装
@@ -230,20 +248,27 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 | `idleTimeoutMs` | `180000` | 流空闲超时 |
 | `allowConcurrent` | `true` | 是否允许同账号并发 |
 | `probeIntervalMs` | `0` | 只读探活间隔，`0` = 关闭 |
-| `contextMode` | `full` | `full`（每轮全量）/ `chained`（只发增量） |
+| `contextMode` | `chained` | `chained`（像官网，快）/ `full`（每轮全量，稳但慢） |
 | `ttsVoice` | `Chloe` | MiMo TTS 音色（冰糖 / Mia / 茉莉 / Chloe / 苏打 / Milo） |
 | `ttsStyle` | 空 | 风格指令（如「轻快上扬，带着压抑不住的激动」） |
 | `enabledModels` | `[]` | 模型白名单，空 = 全部 |
 
-### `contextMode` 怎么选
+### `contextMode` 怎么选（影响速度）
 
-| 模式 | 行为 | 代价 |
-|---|---|---|
-| **`full`（默认）** | 每轮把完整转写作为**最新那条消息**发出 | 费 token，但模型要的信息永远在眼前 |
-| `chained` | 只发增量，靠上游会话维护上下文 | 省 token，但协议只存在于链首，长会话可能丢 |
+| 模式 | 行为 | 首字实测 | 适合 |
+|---|---|---|---|
+| **`chained`（默认）** | **同一个对话只发新内容**，靠 `conversationId` 让服务端维护上下文 | **3.9s** | 日常使用（推荐） |
+| `full` | 每轮开新会话 + 重发完整历史 + 工具协议 | 8.9s（长历史） | 出问题时排查 |
 
-> 照搬 DeepSeek 的默认（`DEFAULT_CONTEXT_MODE = "full"`）。真机实测：`chained` 下
-> 第二轮只发 `[Tool Result …]` 时上游会**挂住不返回**。
+**为什么 `chained` 快这么多**：官网聊得快，是因为它只发你新说的那句话。
+而 `full` 每轮要重发几万字符（历史 + 工具协议），上游得先读完才开口。
+
+**`chained` 是安全的**：真机验证过 —— 第一轮说「暗号是蓝鲸42」，
+第二轮只发「暗号是什么？」，模型答出「蓝鲸42」。服务端确实按 `conversationId` 记着上下文。
+
+> 🔴 两条路**必须各自成对**：复用会话就只发增量，发全量就开新会话。
+> 「复用会话 + 又发全量」= 服务端存一份、我们再发一份 ⇒ 模型看到两份历史
+> ⇒ 吐交叠的损坏 JSON。这个坑真机踩过。
 
 ## 数据存在哪
 
@@ -428,7 +453,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 62 项断言：工具协议解析 / SSE / 请求体 / 续聊 / Linux 分支
+node test/offline.mjs          # 63 项断言：工具协议解析 / SSE / 请求体 / 续聊 / Linux 分支
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -454,8 +479,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.6.1.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.6.1.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.7.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.0.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
