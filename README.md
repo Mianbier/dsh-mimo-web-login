@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.7.2-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.7.3-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,34 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.7.3 — 修复 XML 方言的参数类型
+
+**问题**：工具调用报 `Error: invalid arguments: "queries" must be an array`。
+
+模型用 `<tool_call><function=…><parameter=queries>[...]</parameter>` 这种方言，
+而我的解析器把参数值**一律当字符串** —— 数组变成了 `"[…]"` 这个字符串。
+
+模型自己也困惑了（reasoning 原文）：
+> "The tool seems to want an array but the harness is serializing my JSON string."
+
+**修复**：按**内容**推断参数类型，三处 XML 解析路径统一走 `coerceParamValue`：
+
+| 值 | 还原成 |
+|---|---|
+| `["a","b"]` / `{"k":1}` | 数组 / 对象 |
+| `true` / `false` | 布尔 |
+| `42` / `-3.5` | 数字 |
+| `a.py` / `https://…` | 字符串（不变） |
+
+真机验证：
+
+```
+finish: {"kind":"tool-calls"}
+工具: web_search
+arguments: {"queries":["NapCatQQ","LLOneBot"]}
+queries 类型: array ✅
+```
 
 ### v1.7.2 — 修复工具调用漏成正文（` ```dsh ` 围栏）
 
@@ -173,7 +201,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.2.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.3.tgz
 ```
 
 ### 从源码目录装
@@ -504,7 +532,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 65 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
+node test/offline.mjs          # 68 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -530,8 +558,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.7.2.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.2.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.7.3.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.3.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。

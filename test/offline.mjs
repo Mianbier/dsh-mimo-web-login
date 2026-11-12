@@ -1401,6 +1401,53 @@ await testAsync('流式过滤器拦住所有围栏变体（含 ```dsh），且�
   assert.ok(r.out.includes('console.log(1)'), '普通代码块内容应该完整流出')
 })
 
+/**
+ * 🔴 真机事故（2026-11-12）：模型用 `<tool_call><function=…><parameter=…>` 方言，
+ * 而我们把参数值**一律当字符串**，于是数组变成了字符串：
+ *
+ *     <parameter=queries>["a","b"]</parameter>
+ *       ⇒ arguments = {"queries":"[\"a\",\"b\"]"}   ← 字符串！
+ *
+ * 宿主校验直接报：`Error: invalid arguments: "queries" must be an array`
+ *
+ * 模型自己也困惑了（reasoning 原文）：
+ *   "The tool seems to want an array but the harness is serializing my JSON string."
+ *
+ * 修法：按**内容**推断类型 —— 看起来像 JSON 的就解析成真实值。
+ */
+test('XML 方言里的数组参数还原成数组，不是字符串', () => {
+  const raw =
+    '<tool_call><function=web_search><parameter=queries>["NapCatQQ", "LLOneBot"]</parameter></function></tool_call>'
+  const { calls } = extractToolCalls(raw)
+  assert.equal(calls.length, 1, '应该解析出调用')
+  assert.equal(calls[0].name, 'web_search')
+
+  const args = JSON.parse(calls[0].arguments)
+  assert.ok(Array.isArray(args.queries), `queries 必须是数组，实际：${JSON.stringify(args.queries)}`)
+  assert.deepEqual(args.queries, ['NapCatQQ', 'LLOneBot'])
+})
+
+test('XML 方言里未闭合的 tool_call 也能解析，且正文保留', () => {
+  // 截图里就是这种：`</function>` 后面没有 `</tool_call>`
+  const raw = '我先去调研。 <tool_call><function=web_search><parameter=queries>["a","b"]</parameter></function>'
+  const { calls, text } = extractToolCalls(raw)
+  assert.equal(calls.length, 1)
+  assert.ok(Array.isArray(JSON.parse(calls[0].arguments).queries), 'queries 应是数组')
+  assert.ok(text.includes('我先去调研'), `围栏前的正文要保留，实际：${text}`)
+})
+
+test('XML 方言里的布尔与数字参数还原成对应类型', () => {
+  const raw =
+    '<tool_call><function=edit><parameter=file_path>a.py</parameter>' +
+    '<parameter=replace_all>true</parameter><parameter=offset>42</parameter></function></tool_call>'
+  const args = JSON.parse(extractToolCalls(raw).calls[0].arguments)
+  assert.equal(args.file_path, 'a.py', '普通字符串保持字符串')
+  assert.equal(typeof args.replace_all, 'boolean', 'true 应还原成布尔')
+  assert.equal(args.replace_all, true)
+  assert.equal(typeof args.offset, 'number', '42 应还原成数字')
+  assert.equal(args.offset, 42)
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)
