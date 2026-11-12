@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.7.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.7.2-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,34 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.7.2 — 修复工具调用漏成正文（` ```dsh ` 围栏）
+
+**问题**：DSH 里显示一坨原始 JSON，工具一个都没执行；而官网上那段就是普通代码块。
+
+**根因是两个 bug 叠加**：
+
+1. **流式过滤器的围栏正则只认 ` ```dsh-tool `**
+   但模型经常写 ` ```dsh `（省掉 `-tool`）、` ```json `、甚至空 ` ``` `。
+   模型自己的 reasoning 里都点出来了：
+   > "```dsh (not ```dsh-tool). The language tag is **"dsh"** not "dsh-tool"!"
+
+2. **`flush()` 无条件把压住的内容吐出去**
+   围栏被识别了、内容也被压住了 —— 但流一结束，`flush()` 又把它全吐出来。
+   等于白压。
+
+**修复**：
+
+- 围栏识别放宽到 `dsh-tool` / `dsh` / `tool` / `json` / `tool_calls` / 空
+- hold-back 窗口按"半截开栏"判据压住（` ```d ` 和 ` ```dsh-tool ` 前缀相同，无法提前区分）
+- **`flush()` 见过围栏就直接丢弃** —— 那属于调用，收尾解析会把它变成真正的 tool-call 块
+
+真机验证：
+
+```
+```dsh + JSON → 只流出正文"我先看一下工作区里已有的东西。"，calls=1 ✅
+```js 普通代码块 → 正常流出，不被误拦 ✅
+```
 
 ### v1.7.1 — 修复图片发送
 
@@ -145,7 +173,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.2.tgz
 ```
 
 ### 从源码目录装
@@ -476,7 +504,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 64 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
+node test/offline.mjs          # 65 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -502,8 +530,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.7.1.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.1.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.7.2.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.2.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。

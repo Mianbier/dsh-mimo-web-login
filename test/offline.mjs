@@ -1360,6 +1360,47 @@ await testAsync('图里没有文字（parse 6002）时，图片仍能上传成�
   assert.ok(calls.some((c) => c.href.includes('/resource/parse')), '应该尝试过 OCR')
 })
 
+/**
+ * 🔴 真机事故（2026-11-12）：模型写 ` ```dsh ` 而不是 ` ```dsh-tool `，
+ * 结果整段 JSON 漏成正文 —— DSH 里显示的是一坨原始 JSON，官网上却是个普通代码块。
+ *
+ * 这是**两个 bug 叠加**：
+ *   ① 流式过滤器的围栏正则只认 `dsh-tool`，`dsh` 不在白名单里
+ *   ② `flush()` **无条件**把压住的 pending 吐出去 —— 即使那正是调用
+ *
+ * 模型自己的 reasoning 里都点出来了：
+ *   "```dsh (not ```dsh-tool). The language tag is \"dsh\" not \"dsh-tool\"!"
+ */
+await testAsync('流式过滤器拦住所有围栏变体（含 ```dsh），且不误拦普通代码块', async () => {
+  const { createStreamFilter } = await import('../lib/tool-protocol.js')
+  const NL = '\n'
+  const body = '{"tool_calls":[{"name":"run_code","arguments":{"code":"console.log(1)"}}]}'
+
+  const feed = (text, size = 5) => {
+    const f = createStreamFilter()
+    let out = ''
+    for (let i = 0; i < text.length; i += size) out += f.push(text.slice(i, i + size))
+    out += f.flush()
+    return { out, sawFence: f.sawFence() }
+  }
+
+  // 各种"应该被当成调用"的围栏写法 —— 一个字符都不能漏
+  for (const tag of ['dsh-tool', 'dsh', 'json', 'tool_calls', '']) {
+    const raw = `前文。${NL}${NL}\`\`\`${tag}${NL}${body}${NL}\`\`\``
+    const { out, sawFence } = feed(raw)
+    assert.ok(sawFence, `\`\`\`${tag}：应该识别到围栏`)
+    assert.ok(!out.includes('tool_calls'), `\`\`\`${tag}：JSON 不该漏成正文，实际：${out}`)
+    assert.ok(!/```[ \t]*dsh/.test(out), `\`\`\`${tag}：围栏标记不该漏出去`)
+    assert.ok(out.includes('前文'), `\`\`\`${tag}：围栏之前的正文应该保留`)
+  }
+
+  // 反例：普通代码块（```js）不能被误拦，否则用户看不到示例代码
+  const js = `示例：${NL}${NL}\`\`\`js${NL}console.log(1)${NL}\`\`\``
+  const r = feed(js)
+  assert.equal(r.sawFence, false, '```js 不该被当成调用围栏')
+  assert.ok(r.out.includes('console.log(1)'), '普通代码块内容应该完整流出')
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)
