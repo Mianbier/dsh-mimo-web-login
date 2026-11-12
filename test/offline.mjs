@@ -1305,6 +1305,61 @@ await testAsync('Linux：浏览器查找覆盖 PATH，并识别有无图形环�
   }
 })
 
+/**
+ * 🔴 真机 bug 回归：**没有文字的图片也必须能发出去**。
+ *
+ * `resource/parse` 是 **OCR**，不是"上传的最后一步"。一张纯色图/风景照会返回
+ * `code=6002 图片中未识别到文字`。早先我把 parse 成功当成了上传的必经一步，
+ * 于是**所有没有文字的图片全部上传失败**，模型收到的是"我这边没有收到图片"。
+ *
+ * 正确行为：parse 失败（尤其 6002）不该阻断 —— 图片本身早就上传好了，
+ * `resourceUrl` 已经拿到，OCR 只是可选的文字提取。
+ */
+await testAsync('图里没有文字（parse 6002）时，图片仍能上传成功', async () => {
+  const { MimoClient } = await import('../lib/mimo-client.js')
+
+  const calls = []
+  const client = new MimoClient(
+    { serviceToken: 't', userId: '1', xiaomichatbotPh: 'p' },
+    {
+      fetchImpl: async (url, init) => {
+        const href = String(url)
+        const method = init?.method ?? 'GET'
+        calls.push({ href, method })
+
+        if (href.includes('/resource/genUploadInfo')) {
+          return new Response(
+            JSON.stringify({ code: 0, data: { uploadUrl: 'https://upload.example/x', resourceUrl: 'https://cdn.example/x.png', objectName: 'obj-1' } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (href.includes('upload.example')) {
+          return new Response('ok', { status: 200 })
+        }
+        if (href.includes('/resource/parse')) {
+          // 关键：模拟"图里没文字"
+          return new Response(
+            JSON.stringify({ code: 6002, msg: '图片中未识别到文字' }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(JSON.stringify({ code: 0 }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    },
+  )
+
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+  const item = await client.uploadMedia({ data: png, mediaType: 'image', name: 'plain.png' })
+
+  assert.ok(item, 'uploadMedia 必须返回结果（不能因为 6002 抛错）')
+  assert.equal(item.fileUrl, 'https://cdn.example/x.png', '应带上传后的 resourceUrl')
+  assert.equal(item.status, 'completed')
+  assert.equal(item.size, png.byteLength)
+  // OCR 没结果时用 fileUrl 兜底，不能是 undefined
+  assert.ok(item.url, 'url 不能为空（parse 失败时用 fileUrl 兜底）')
+  assert.ok(calls.some((c) => c.href.includes('/resource/parse')), '应该尝试过 OCR')
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)

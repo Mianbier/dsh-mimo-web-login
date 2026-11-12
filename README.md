@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.7.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,29 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.7.1 — 修复图片发送
+
+**问题**：发图片时模型总说「我这边没有收到图片」。
+
+**根因**：`resource/parse` 被我当成了"上传的必经一步"，但它其实是 **OCR**——
+专门提取图片里的**文字**。一张纯色图/风景照会返回：
+
+```json
+{"code": 6002, "msg": "图片中未识别到文字"}
+```
+
+于是**所有不含文字的图片全部上传失败**，图片被静默丢弃。
+
+**修复后**：parse 只是可选步骤，失败也照常返回（图片早就上传好了，`resourceUrl` 已拿到）。
+真机验证：
+
+```
+造了一张 64x64 渐变 PNG
+模型回答："这张图是渐变色：左侧偏绿/青，右上为紫红/品红，右下偏粉与暖黄…"
+```
+
+耗时也从 14.2s 降到 6.2s（不再对 6002 做无谓重试）。
 
 ### v1.7.0 — 明显更快 + 官网实时可见
 
@@ -122,7 +145,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.1.tgz
 ```
 
 ### 从源码目录装
@@ -453,7 +476,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 63 项断言：工具协议解析 / SSE / 请求体 / 续聊 / Linux 分支
+node test/offline.mjs          # 64 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -479,8 +502,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.7.0.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.0.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.7.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.1.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
