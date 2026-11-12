@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.7.3-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.7.4-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,42 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.7.4 — 修复 XML 漏成正文 + 工具签名丢约束
+
+**问题 1：XML 方言漏成正文**
+
+DSH 里能看到一行行 `<tool_call><function=web_search><parameter=queries>[...]`，
+但工具**其实执行了**。根因：流式过滤器只认 ` ``` ` 围栏，**完全不认 XML**。
+
+还有个隐藏坑：闭合标签 `</tool_call>` 常**跨包**到达 —— 前一包切到 `</function>`
+就恢复了正文流，下一包的 `</tool_call>` 就漏出来了。
+
+现在 XML 也进 hold-back 窗口，且流级标记会把开头残渣剥掉。
+
+**问题 2：工具签名丢约束，导致搜索必失败**
+
+```
+Error: queries must contain at most 4 queries
+```
+
+模型发 8 个查询，但 `web_search` 上限是 4。**根因是我的签名渲染**：
+
+| 之前 | 现在 |
+|---|---|
+| `queries: string[]` | `queries: string[] (max 4)` |
+
+`maxItems` / `minItems` 被丢了。模型不是不听话，是**根本没被告知**这条限制。
+
+**验证**：
+
+| 场景 | 结果 |
+|---|---|
+| XML + 前文 | ✅ 只流出前文 |
+| 未闭合 `</tool_call>` | ✅ 不漏 |
+| 调用 + 后续说明 | ✅ 后半段正常流出 |
+| `a < b` 数学文本 | ✅ 不误伤 |
+| HTML 代码块 | ✅ 不误拦 |
 
 ### v1.7.3 — 修复 XML 方言的参数类型
 
@@ -201,7 +237,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.3.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.4.tgz
 ```
 
 ### 从源码目录装
@@ -532,7 +568,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 68 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
+node test/offline.mjs          # 70 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -558,8 +594,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.7.3.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.3.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.7.4.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.4.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。

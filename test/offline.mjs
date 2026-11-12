@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, delimiter } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { extractToolCalls, buildToolSection, toolProtocolInstructions, CALL_OPEN, CALL_CLOSE } from '../lib/tool-protocol.js'
+import { extractToolCalls, buildToolSection, buildToolSignature, toolProtocolInstructions, CALL_OPEN, CALL_CLOSE } from '../lib/tool-protocol.js'
 import { MimoClient, MimoError, randomId, ORIGIN } from '../lib/mimo-client.js'
 import { REQUIRED_COOKIES, LOGIN_URL } from '../lib/browser-login.js'
 import { normalizeCookieValue } from '../lib/store.js'
@@ -1446,6 +1446,77 @@ test('XML 方言里的布尔与数字参数还原成对应类型', () => {
   assert.equal(args.replace_all, true)
   assert.equal(typeof args.offset, 'number', '42 应还原成数字')
   assert.equal(args.offset, 42)
+})
+
+/**
+ * 🔴 真机事故（2026-11-12）：XML 方言漏成正文。
+ *
+ * 流式过滤器只认 ` ``` ` 围栏，**完全不认 XML**。于是模型一用
+ * `<tool_call><function=web_search>`，整段 XML 立刻当正文吐出去
+ * —— 用户在 DSH 里看到的是一行行原始标签，而工具其实执行了。
+ *
+ * 还有一个坑：闭合标签 `</tool_call>` 常**跨包**到达。
+ * 前一包切到 `</function>` 就恢复正文流，下一包的 `</tool_call>` 就漏了。
+ */
+await testAsync('流式过滤器拦住 XML 方言，不误伤数学文本和 HTML 代码块', async () => {
+  const { createStreamFilter } = await import('../lib/tool-protocol.js')
+
+  const feed = (text, size = 6) => {
+    const f = createStreamFilter()
+    let out = ''
+    for (let i = 0; i < text.length; i += size) out += f.push(text.slice(i, i + size))
+    out += f.flush()
+    return out
+  }
+
+  const XML = /<tool_call|<function\s*[=:]|<parameter\s*[=:]|<\/tool_call>|<\/function>/i
+
+  // ① 截图原样：前文 + XML 调用
+  const withProse = feed('我先去调研一下 GitHub 上相关的项目。\n<tool_call><function=web_search><parameter=queries>["a","b","c","d"]</parameter></function></tool_call>')
+  assert.ok(!XML.test(withProse), `XML 不该漏成正文，实际：${JSON.stringify(withProse)}`)
+  assert.ok(withProse.includes('我先去调研'), '调用之前的正文要保留')
+
+  // ② 未闭合（模型经常不写 </tool_call>）
+  const unclosed = feed('先去查一下：<tool_call><function=web_search><parameter=queries>["a"]</parameter></function>')
+  assert.ok(!XML.test(unclosed), `未闭合的 XML 也不该漏，实际：${JSON.stringify(unclosed)}`)
+  assert.ok(unclosed.includes('先去查一下'), '前文要保留')
+
+  // ③ 调用之后还有说明 —— 后半段必须能正常流出
+  const withTail = feed('<tool_call><function=web_search><parameter=queries>["a"]</parameter></function></tool_call>\n\n搜索完成，接下来我分析结果。')
+  assert.ok(!XML.test(withTail), `闭合标签不该漏，实际：${JSON.stringify(withTail)}`)
+  assert.ok(withTail.includes('搜索完成'), `调用之后的正文要保留，实际：${JSON.stringify(withTail)}`)
+
+  // ④ 反例：普通尖括号文本不能被拦（`a < b`）
+  const math = feed('判断条件：a < b 且 c > d，这是数学表达。')
+  assert.ok(math.includes('a < b'), `普通 < 文本不该被拦，实际：${JSON.stringify(math)}`)
+
+  // ⑤ 反例：HTML 代码块不能被误伤
+  const html = feed('示例：\n```html\n<div class="x">hello</div>\n```')
+  assert.ok(html.includes('<div class="x">'), `HTML 代码块要完整流出，实际：${JSON.stringify(html)}`)
+})
+
+/**
+ * 🔴 真机事故（2026-11-12）：`web_search` 的 `queries` 有 `maxItems: 4`，
+ * 但签名只渲染成 `queries: string[]` —— 模型不知道有上限，一口气发了 **8 个**，
+ * 工具直接报 `queries must contain at most 4 queries`，搜索全部失败。
+ *
+ * 模型不是"不听话"，是**它根本没被告知**这条限制。签名必须把长度约束渲染出来。
+ */
+test('数组参数的长度约束要出现在工具签名里', () => {
+  const tool = {
+    name: 'web_search',
+    description: 'Search the web.',
+    parameters: {
+      type: 'object',
+      properties: {
+        queries: { type: 'array', maxItems: 4, items: { type: 'string' }, description: 'Search queries' },
+      },
+      required: ['queries'],
+    },
+  }
+  const sig = buildToolSignature(tool, false)
+  assert.ok(sig.includes('max 4'), `签名要写出 maxItems，实际：${sig}`)
+  assert.ok(sig.includes('string[]'), `签名要保留数组类型，实际：${sig}`)
 })
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
