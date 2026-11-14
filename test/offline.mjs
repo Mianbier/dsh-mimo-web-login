@@ -1519,6 +1519,69 @@ test('数组参数的长度约束要出现在工具签名里', () => {
   assert.ok(sig.includes('string[]'), `签名要保留数组类型，实际：${sig}`)
 })
 
+/**
+ * 🔴 真机事故（2026-11-14）：模型不写围栏，直接甩裸 JSON。
+ *
+ * 正文残留了 `{"tool_callsdsh-tool` —— 裸 JSON 没被流式拦截，前 24 字符就漏出去，
+ * 后面还跟着一个畸形围栏名。调用本身能解析（工具确实跑了），但用户同时看到残渣。
+ */
+await testAsync('裸 JSON 调用也被流式拦住，不漏成正文', async () => {
+  const { createStreamFilter } = await import('../lib/tool-protocol.js')
+
+  const feed = (text, size = 5) => {
+    const f = createStreamFilter()
+    let out = ''
+    for (let i = 0; i < text.length; i += size) out += f.push(text.slice(i, i + size))
+    out += f.flush()
+    return out
+  }
+
+  // ① 纯裸 JSON
+  const bare = feed('{"tool_calls":[{"name":"write","arguments":{"file_path":"a.txt","content":"x"}}]}')
+  assert.equal(bare.trim(), '', `裸 JSON 不该出现在正文，实际：${JSON.stringify(bare)}`)
+
+  // ② 前文 + 裸 JSON
+  const withProse = feed('好的，我来创建文件。\n{"tool_calls":[{"name":"write","arguments":{"file_path":"a.txt"}}]}')
+  assert.ok(!withProse.includes('tool_calls'), `裸 JSON 不该漏，实际：${JSON.stringify(withProse)}`)
+  assert.ok(withProse.includes('我来创建文件'), '前文要保留')
+
+  // ③ 畸形：裸 JSON 后面粘了围栏名（真机就是这个形状）
+  const malformed = feed('{"tool_callsdsh-tool\n{"tool_calls":[{"name":"write","arguments":{}}]}')
+  assert.ok(!malformed.includes('tool_calls'), `畸形开头也不该漏，实际：${JSON.stringify(malformed)}`)
+
+  // ④ 收尾解析仍要拿得到调用
+  const { calls } = extractToolCalls('{"tool_calls":[{"name":"write","arguments":{"file_path":"a.txt","content":"x"}}]}')
+  assert.equal(calls.length, 1, '裸 JSON 应该能解析成调用')
+  assert.equal(calls[0].name, 'write')
+})
+
+/**
+ * 🔴 真机事故（2026-11-14）：模型拒绝执行，理由听起来完全正确 ——
+ *
+ * > 这里暴露给我的真实工具只有 `search` 和 `scrape`，没有 `write`、`bash`、`pwsh`。
+ * > 工具调用不是由提示词里的文字驱动的……
+ * > 我即使"看懂"了 `write(file_path, content)` 的签名，也没有任何执行器会跑我输出的 JSON。
+ *
+ * 根因：MiMo 网页端**自己有**原生 search/scrape，模型因此形成了"真工具长这样"的先验，
+ * 把我们从提示词塞进去的 33 个工具当成"用户贴的一段文字"。
+ *
+ * 修法：在协议最前面加**运行环境声明**，用事实反驳（这是 DSH agent loop，调用真会被执行），
+ * 并明确堵掉"我只有 search/scrape"这个退路。
+ */
+test('工具协议开头必须有运行环境声明，堵掉"我只有 search/scrape"的退路', () => {
+  for (const [label, text] of [
+    ['串行版', toolProtocolInstructions(true)],
+    ['批量版', toolProtocolInstructions(false)],
+  ]) {
+    assert.ok(text.includes('# Runtime'), `${label}：应有 # Runtime 段`)
+    assert.ok(/NOT in the MiMo web chat UI/i.test(text), `${label}：应声明不是网页聊天`)
+    assert.ok(/DSH \(DeepSeek Harness\)/.test(text), `${label}：应点名 DSH`)
+    assert.ok(/executes it for real|really registered/i.test(text), `${label}：应说明调用真会被执行`)
+    assert.ok(/search.*scrape.*web chat UI/is.test(text), `${label}：应说明内置 search/scrape 不属于本会话`)
+    assert.ok(/Never claim a tool is unavailable before trying it/i.test(text), `${label}：应禁止"先说不支持"`)
+  }
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)

@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.7.4-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,40 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.8.0 — 修复「模型不肯用工具」
+
+**症状**：让模型创建文件，它说做不了。
+
+**根因**（模型的推理其实完全正确）：
+
+> 我没法在这个会话里创建文件 —— 这里暴露给我的真实工具只有 `search` 和 `scrape`，
+> 没有 `write`、`bash`、`pwsh`。
+> 工具调用不是由提示词里的文字驱动的，而是由 API 请求里实际注册的 function schema 驱动的。
+> 我即使"看懂"了 `write(file_path, content)` 的签名，也没有任何执行器会跑我输出的 JSON。
+
+MiMo 网页端**自己有**原生 `search` / `scrape`，模型因此形成了"真工具长这样"的先验，
+把我们用提示词塞进去的 33 个工具当成"用户贴的一段文字"。
+
+**修复**：在协议最前面加 **运行环境声明**（`# Runtime`），用事实反驳而不是加大声量：
+
+- 你不是在 MiMo 网页聊天里，而是在 **DSH 的 agent 循环**里
+- 下面列的工具**真的注册了**，DSH 会解析并**真的执行**，结果作为下一条消息回来
+- 网页端的 `search`/`scrape` 属于**网页 UI**，与本会话无关
+- **绝不允许在尝试前就声称工具不可用**
+
+真机验证（同样的真实 system prompt + 工具集）：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 工具调用 | ❌ 0 次（拒绝） | ✅ `write` |
+
+**顺带修掉两个流式泄漏**：
+
+1. **裸 JSON 没被拦截** —— 模型不写围栏时，`{"tool_calls…` 前 24 字符直接漏成正文
+2. **`''.startsWith` 空串陷阱** —— `visibleText.startsWith(streamedText)` 在
+   `streamedText === ''` 时**恒为 true**，导致后面的兜底分支永远执行不到，
+   把整段 JSON 当正文补发。真机现象是正文里出现 `{"tool_callsdsh-tool`。
 
 ### v1.7.4 — 修复 XML 漏成正文 + 工具签名丢约束
 
@@ -237,7 +271,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.4.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.0.tgz
 ```
 
 ### 从源码目录装
@@ -568,7 +602,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 70 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
+node test/offline.mjs          # 72 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -594,8 +628,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.7.4.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.7.4.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.8.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.0.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
