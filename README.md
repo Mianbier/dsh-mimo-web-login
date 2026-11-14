@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.8.2-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,50 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.9.0 — 删掉所有自创提示词，只忠实转达 DSH
+
+**这是我的错，得写清楚。**
+
+为了"修正模型行为"，我在 v1.8.x 里陆续往提示词塞了这些东西：
+
+| 塞进去的 | 结果 |
+|---|---|
+| `# Runtime` 运行环境声明（说"你在 DSH 里、工具真会执行"） | 模型把它当成用户贴的文档 |
+| `[SYSTEM INSTRUCTIONS]` / `[TOOL INSTRUCTIONS]` 分区标题 | 同样的内容加了两遍标题，模型更混乱 |
+| `[ACTION REQUIRED — call it NOW …]` 结尾提醒 | 模型读成"工具阶段已结束，别调了" |
+| 「格式示例是样本、不是你调过的」说明 | 反而提示模型"我好像调过什么" |
+
+**每一次"修复"都引入了新问题。** 根本原因是：DSH 的 system prompt 已经有
+**5724 字**的完整指令（角色、工具用法、工作规则、路径约定都在里面），
+我再往里面加东西，等于在跟它打架。
+
+**这一版全部删除**，回到 DeepSeek 的做法：
+
+```
+system prompt（DSH 的，原样）
+  +
+工具协议（照搬 dsh-deepseek-web-login，一个字不改）
+  +
+工具目录
+  +
+---
+  +
+转写（User: / Assistant: / [Tool Result …]）
+```
+
+验证：
+
+```
+MiMo 协议开头:  "# Tool Calling Protocol"
+DeepSeek 开头:  "Tool Calling Protocol"     ← 完全对应
+自创内容残留:   全部清除 ✅
+
+真机直连 API：15 帧流式，解析出 1 个调用，无畸形 ✅
+```
+
+> 💡 **适配器的职责是忠实转达，不是替宿主"管理"模型。**
+> DSH 管上下文、管重试、管工具语义；插件只负责把请求发出去、把响应搬回来。
 
 ### v1.8.2 — 内容被静默吞掉（工具「失败」的真凶）
 
@@ -351,7 +395,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.2.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.0.tgz
 ```
 
 ### 从源码目录装
@@ -708,8 +752,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.8.2.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.2.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.9.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.0.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。

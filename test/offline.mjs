@@ -1556,29 +1556,26 @@ await testAsync('裸 JSON 调用也被流式拦住，不漏成正文', async () 
 })
 
 /**
- * 🔴 真机事故（2026-11-14）：模型拒绝执行，理由听起来完全正确 ——
+ * 协议必须与 DeepSeek 逐字一致 —— **不加任何自创的补充说明**。
  *
- * > 这里暴露给我的真实工具只有 `search` 和 `scrape`，没有 `write`、`bash`、`pwsh`。
- * > 工具调用不是由提示词里的文字驱动的……
- * > 我即使"看懂"了 `write(file_path, content)` 的签名，也没有任何执行器会跑我输出的 JSON。
+ * 教训（2026-11-14，我自己犯的）：为了"修正模型行为"，我在协议前面加过
+ * `# Runtime` 运行环境声明、在提示词里加过 `[SYSTEM INSTRUCTIONS]` 分区标题、
+ * 在结尾加过 `[ACTION REQUIRED …]` 提醒。结果每一次都引入了新的问题 ——
+ * 模型把 `[SYSTEM INSTRUCTIONS]` 当成用户贴的文档、把结尾提醒读成
+ * "工具阶段已经结束了，不要调了"，反而更糟。
  *
- * 根因：MiMo 网页端**自己有**原生 search/scrape，模型因此形成了"真工具长这样"的先验，
- * 把我们从提示词塞进去的 33 个工具当成"用户贴的一段文字"。
- *
- * 修法：在协议最前面加**运行环境声明**，用事实反驳（这是 DSH agent loop，调用真会被执行），
- * 并明确堵掉"我只有 search/scrape"这个退路。
+ * DSH 的 system prompt（5724 字）已经把角色、工具用法、工作规则说全了。
+ * 适配器该做的是**忠实转达**，不是往里面塞补丁。所以这里断言：
+ * 协议开头就是 DeepSeek 那句 `# Tool Calling Protocol`，前面一个字都没有。
  */
-test('工具协议开头必须有运行环境声明，堵掉"我只有 search/scrape"的退路', () => {
+test('协议与 DeepSeek 逐字一致，开头不加任何自创声明', () => {
   for (const [label, text] of [
     ['串行版', toolProtocolInstructions(true)],
     ['批量版', toolProtocolInstructions(false)],
   ]) {
-    assert.ok(text.includes('# Runtime'), `${label}：应有 # Runtime 段`)
-    assert.ok(/NOT in the MiMo web chat UI/i.test(text), `${label}：应声明不是网页聊天`)
-    assert.ok(/DSH \(DeepSeek Harness\)/.test(text), `${label}：应点名 DSH`)
-    assert.ok(/executes it for real|really registered/i.test(text), `${label}：应说明调用真会被执行`)
-    assert.ok(/search.*scrape.*web chat UI/is.test(text), `${label}：应说明内置 search/scrape 不属于本会话`)
-    assert.ok(/Never claim a tool is unavailable before trying it/i.test(text), `${label}：应禁止"先说不支持"`)
+    assert.ok(text.startsWith('# Tool Calling Protocol'), `${label}：必须以 "# Tool Calling Protocol" 开头，实际开头：${JSON.stringify(text.slice(0, 60))}`)
+    assert.ok(!text.includes('# Runtime'), `${label}：不该有自创的 # Runtime 段`)
+    assert.ok(!/NOT in the MiMo web chat UI/i.test(text), `${label}：不该有自创的运行时声明`)
   }
 })
 
