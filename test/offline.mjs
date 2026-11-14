@@ -1582,6 +1582,60 @@ test('工具协议开头必须有运行环境声明，堵掉"我只有 search/sc
   }
 })
 
+/**
+ * 🔴 真机事故（2026-11-14）：**内容被静默吞掉**。
+ *
+ * 会话实录：step 1 调 `bash ls` 成功（DSH 有 CALL + RESULT），
+ * 但 step 2 的 assistant 消息**只有 reasoning、没有任何 tool-call 块**。
+ * DSH 什么也没收到 ⇒ 模型在下一步"回忆"成"我调了但失败了" ⇒ 无限重试，
+ * 用户看到的就是「工具调用失败，请重新判断」。
+ *
+ * 根因：流式过滤器看到"像调用"的标记就压住，但 `extractToolCalls` 没解析出
+ * 调用时，那段内容既没进正文也没变成调用 —— 彻底消失。
+ *
+ * 铁律：**宁可把畸形内容当正文漏出来，也绝不静默丢弃。**
+ */
+await testAsync('像调用但解析失败时，内容必须当正文漏出来，不能静默丢弃', async () => {
+  const { createAdapter } = await import('../lib/adapter.js')
+
+  // 这段会被流式过滤器当成"调用候选"压住，但 JSON 是坏的 ⇒ 解析不出调用
+  const broken = '```dsh-tool\n{"tool_calls":[{"name":"bash", arguments: BROKEN\n```'
+  const adapter = createAdapter({
+    getAuth: () => ({ serviceToken: 't', userId: '1', xiaomichatbotPh: 'p' }),
+    getSettings: () => ({ thinking: false, webSearch: 'disabled', maxImages: 0, contextWindow: 1048576, minIntervalMs: 0, idleTimeoutMs: 60000, allowConcurrent: true, contextMode: 'full' }),
+    logger: {},
+    fetchImpl: async (url) => {
+      if (String(url).includes('/bot/config')) {
+        return new Response(JSON.stringify({ code: 0, data: { modelConfigList: [{ model: 'mimo-v2.6-pro', name: 'MiMo-V2.6-Pro' }] } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (String(url).includes('/conversation/save')) {
+        return new Response(JSON.stringify({ code: 0, msg: '成功', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return sseResponse([
+        `event: message\ndata: ${JSON.stringify({ messageType: 'assistant', content: broken })}\n\n`,
+        'event: finish\ndata: {}\n\n',
+      ])
+    },
+  })
+
+  const prep = await adapter.prepareCall('mimo-web', 'mimo-v2.6-pro')
+  let text = ''
+  let calls = 0
+  for await (const c of prep.stream({
+    model: 'mimo-v2.6-pro',
+    system: 's',
+    reasoningEffort: 'off',
+    messages: [{ id: 'u', role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    tools: [],
+  })) {
+    if (c.type === 'text-delta') text += c.text
+    if (c.type === 'block-end' && c.block?.type === 'tool-call') calls += 1
+  }
+
+  assert.equal(calls, 0, '坏 JSON 不该解析成调用')
+  assert.ok(text.includes('name'), `解析失败的内容必须当正文漏出来，实际正文：${JSON.stringify(text)}`)
+})
+
 // ── 汇总 ────────────────────────────────────────────────────────────────
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项`)

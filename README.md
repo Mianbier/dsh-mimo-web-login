@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.8.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.8.2-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,43 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.8.2 — 内容被静默吞掉（工具「失败」的真凶）
+
+**症状**：第 1 步工具执行成功，之后每一步都报「工具调用失败，请重新判断」。
+
+**会话实录**（`tool/call=1, tool/result=1`）：
+
+```text
+1  REQUEST effort=on
+2  ASSISTANT[reasoning+tool-call]   ← step 1 有调用 ✅
+3  CALL bash {"command":"ls"}       ← 真的执行了 ✅
+4  RESULT isError=false             ← 真的成功了 ✅
+6  ASSISTANT[reasoning]             ← step 2 只有 reasoning，没有 tool-call！
+```
+
+**step 2 的调用凭空消失了。** 根因不在模型，在我的代码：
+
+流式过滤器看到"像调用"的标记就把内容**压住**，但如果 `extractToolCalls`
+最后**没解析出调用**，那段内容既没进正文、也没变成调用 —— **彻底消失**。
+DSH 什么也没收到 ⇒ 模型下一步"回忆"成"我调了但失败了" ⇒ 无限重试。
+
+**铁律**：宁可把畸形内容当正文漏出来，也**绝不静默丢弃**。
+
+```js
+// 之前：过滤器压住了就一律丢弃
+remainder = tailText   // 解析失败时是空 ⇒ 内容蒸发
+
+// 现在：解析出调用才丢弃，解析不出就原样漏出来
+remainder = calls.length > 0 ? tailText : visibleText
+```
+
+**两步真机验证**：
+
+| | step 1 | step 2（带工具结果） |
+|---|---|---|
+| 修复前 | ✅ 1 次调用 | ❌ 0 次（内容蒸发） |
+| 修复后 | ✅ 1 次调用 | ✅ 1 次调用 |
 
 ### v1.8.1 — 深度思考会「脑内自演」工具失败
 
@@ -314,7 +351,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.2.tgz
 ```
 
 ### 从源码目录装
@@ -645,7 +682,7 @@ dsh plugin --profile desktop remove dsh-mimo-web-login
 ```bash
 npm test                       # 下面三条离线测试，全自动、不碰网络
 
-node test/offline.mjs          # 72 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
+node test/offline.mjs          # 73 项断言：工具协议 / SSE / 请求体 / 续聊 / 图片 / Linux
 node test/assembly.mjs         # 用假 ctx 真的跑一遍 apply()，验证注册 + 全部 HTTP 路由
 node test/render.mjs           # 面板五个页签的渲染冒烟（含"未登录时粘贴按钮可点"回归）
 
@@ -671,8 +708,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.8.1.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.1.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.8.2.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.2.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
