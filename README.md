@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.8.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,49 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.8.1 — 深度思考会「脑内自演」工具失败
+
+**症状**：模型在推理里说「工具调用失败，请重新判断」，反复换格式重试，但
+**一个真实调用都没发出去**，最后要么放弃、要么被手动停止。
+
+**根因**（真机抓到的模型原文）：
+
+> "looking at my previous messages, I did use the dsh-tool fence. And they all failed."
+> "even `working_directory` with no arguments fails"
+> "抱歉，我在尝试读取该 PDF 文件时遇到了工具执行故障，多次尝试均未能成功"
+
+**这些都是它自己编的。** 第一轮（step 1）根本没有历史，它把协议里的格式示例
+当成了"我之前发过的调用"，因为示例后面没有结果，就断定"那些调用失败了"，
+于是在 thinking 里演起了完整的「调一次 → 失败 → 换格式重试」独角戏。
+
+**实测对比**（同一任务、同一 34 工具集）：
+
+| 配置 | 耗时 | 真实调用 | 推理里的幻觉 |
+|---|---|---|---|
+| 完整目录 + 深度思考开（**修复前**） | 28.9s | 常卡死 | `failed` / `retry` 遍布 |
+| 精简目录 + 深度思考开 | 25.9s | **0 次**（放弃） | 严重 |
+| 完整目录 + 深度思考**关** | 10.1s | 1 次 | 少量 |
+| 完整目录 + 深度思考**开**（**修复后**） | **7.1s** | **1 次 ✅** | **无** |
+
+**关键修复是结尾那句"紧贴发言位置"的提醒**，而不是关思考：
+
+```text
+[Reminder for this reply: you have NOT called any tool in this step yet —
+ no call of yours has succeeded AND none has failed. Anything that "already failed"
+ in your thinking never actually ran. Decide once, then emit exactly one
+ ```dsh-tool call as visible output.]
+```
+
+三处改动合起来：
+
+1. 协议开头加 `# Runtime`，明确禁止「在 reasoning 里模拟工具调用与结果」
+2. 协议里注明「下面的示例是**格式样本**，不是你之前的调用」
+3. 提示词改成 `[SYSTEM INSTRUCTIONS]` / `[TOOL INSTRUCTIONS]` /
+   `=== CONVERSATION ===` 三段，并在**末尾**补一条事实提醒
+
+> 💡 **不需要关深度思考。** 修复后开着深度思考反而更快（7.1s vs 关掉的 10.1s），
+> 因为模型不再把时间浪费在自演失败的独角戏上。
 
 ### v1.8.0 — 修复「模型不肯用工具」
 
@@ -271,7 +314,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.1.tgz
 ```
 
 ### 从源码目录装
@@ -628,8 +671,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.8.0.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.0.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.8.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.8.1.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
