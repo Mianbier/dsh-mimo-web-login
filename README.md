@@ -7,7 +7,7 @@
 [![CI](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml/badge.svg)](https://github.com/Mianbier/dsh-mimo-web-login/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.18%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](package.json)
-[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
+[![Version](https://img.shields.io/badge/version-1.9.1-blue.svg)](https://github.com/Mianbier/dsh-mimo-web-login/releases)
 
 </div>
 
@@ -35,6 +35,50 @@ DSH agent loop ──▶ ctx.llm ──▶ [mimo-web 适配器] ──▶ aistud
 ```
 
 ## ✨ 最近更新
+
+### v1.9.1 — 查清了根本限制（不是 bug）
+
+**先给结论：MiMo 网页端有它自己的原生工具，我们无法接管。**
+
+实测（裸问一句「你有哪些工具」）：
+
+> 我实际能调用的工具就两个：
+> 1. **search（联网检索）** — 搜索网络信息，最多 5 个关键词并行
+> 2. **scrape（网页爬取）** — 抓取网页正文，最多 15 个 URL
+>
+> **除此之外没有别的工具了。** 比如我没有代码执行、文件读写、图像生成之类的工具。
+
+第二次实测（让它查时间），它**真的调用了原生 search**，返回带 `[citation:1]` 的真实检索结果 ——
+**而这个调用我的适配器完全看不到**，因为它被网页端自己执行掉了。
+
+### 这解释了你遇到的所有怪现象
+
+| 现象 | 解释 |
+|---|---|
+| 模型说「我只有 search 和 scrape」 | **它说的是真话** |
+| 模型说「工具调用失败」但 DSH 里没有失败记录 | 它指的是**原生工具的调用**，那部分我们收不到 |
+| 有时能正常调 `write`/`pwsh`，有时不行 | 取决于模型这次选择用哪套工具 |
+| 推理里反复纠结格式 | 两套工具协议在打架：原生 `antml` vs 我们的 ```dsh-tool |
+
+### 为什么修不好
+
+网页端的工具调用是**服务端行为**：
+- 模型输出 `antml:invoke` → 网页端**自己执行** → 结果注入回对话
+- 我们的 ` ```dsh-tool ` 只是**普通文本**，网页端不认，只有 DSH 认
+
+一个请求里两套机制并存，模型的先验里"我能调用的只有 search/scrape"是**正确的**。
+这不能靠提示词修 —— 提示词改不了服务端的执行路径。
+
+### 能做的（已做）
+
+- 协议与 `dsh-deepseek-web-login` **逐字一致**，不加任何自创补丁
+- 解析器兜住所有方言：```dsh-tool / ```dsh / ```json / 裸 JSON / XML / antml
+- 压住却解析不出时**原样漏出来**，绝不静默丢弃
+
+### 诚实的话
+
+**如果你需要稳定的工具调用，用 MiMo 官方 API（OpenAI 兼容，有原生 function calling）。**
+网页端逆向这条路，工具调用天生是"提示词模拟"，成功率受模型状态影响，做不到 100%。
 
 ### v1.9.0 — 删掉所有自创提示词，只忠实转达 DSH
 
@@ -395,7 +439,7 @@ dsh plugin --profile desktop add ./dsh-mimo-web-login
 
 ```bash
 # 下载最新的 tgz，然后
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.0.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.1.tgz
 ```
 
 ### 从源码目录装
@@ -752,8 +796,8 @@ Windows 上也可以双击 `验证MiMo连接.bat`。
 dsh plugin --profile desktop add <这个目录的绝对路径>
 
 # 或从 tgz 装
-npm pack        # 产出 dsh-mimo-web-login-1.9.0.tgz
-dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.0.tgz
+npm pack        # 产出 dsh-mimo-web-login-1.9.1.tgz
+dsh plugin --profile desktop add ./dsh-mimo-web-login-1.9.1.tgz
 ```
 
 装完重启 DSH。**不需要** `npm install`（没有依赖），也没有构建步骤（源码即产物）。
